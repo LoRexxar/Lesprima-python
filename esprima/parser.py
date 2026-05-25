@@ -3072,6 +3072,31 @@ class Parser(object):
 
         return self.finalize(node, Node.ImportNamespaceSpecifier(local))
 
+    def parseImportAttributes(self):
+        """Parse import attributes: { key: "value", ... }"""
+        self.expect('{')
+        attributes = []
+        while not self.match('}'):
+            node = self.createNode()
+            # Key can be identifier or string
+            if self.lookahead.type is Token.StringLiteral:
+                key = self.finalize(node, Node.StringLiteral(self.lookahead.value, self.getTokenRaw(self.lookahead)))
+                self.nextToken()
+            else:
+                key = self.parseIdentifierName()
+            self.expect(':')
+            # Value must be string
+            if self.lookahead.type is not Token.StringLiteral:
+                self.throwUnexpectedToken(self.lookahead)
+            value_node = self.createNode()
+            value = self.finalize(value_node, Node.StringLiteral(self.lookahead.value, self.getTokenRaw(self.lookahead)))
+            self.nextToken()
+            attributes.append({'key': key, 'value': value})
+            if not self.match('}'):
+                self.expect(',')
+        self.expect('}')
+        return attributes
+
     def parseImportDeclaration(self):
         if self.context.inFunctionBody:
             self.throwError(Messages.IllegalImportDeclaration)
@@ -3111,9 +3136,16 @@ class Parser(object):
                 self.throwError(message, self.lookahead.value)
             self.nextToken()
             src = self.parseModuleSpecifier()
+
+        # ES2025: Import attributes
+        attributes = None
+        if self.matchKeyword('with'):
+            self.nextToken()
+            attributes = self.parseImportAttributes()
+
         self.consumeSemicolon()
 
-        return self.finalize(node, Node.ImportDeclaration(specifiers, src))
+        return self.finalize(node, Node.ImportDeclaration(specifiers, src, attributes))
 
     # https://tc39.github.io/ecma262/#sec-exports
 

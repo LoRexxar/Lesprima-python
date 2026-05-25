@@ -509,12 +509,13 @@ class Import(Node):
 
 
 class ImportDeclaration(ModuleDeclaration):
-    def __init__(self, specifiers, source):
-        # type: (List[Union[ImportSpecifier, ImportDefaultSpecifier, ImportNamespaceSpecifier]], Literal) -> None
-        """An import declaration, e.g., `import foo from "mod";`."""
+    def __init__(self, specifiers, source, attributes=None):
+        # type: (List[Union[ImportSpecifier, ImportDefaultSpecifier, ImportNamespaceSpecifier]], Literal, Optional[List]) -> None
+        """An import declaration, e.g., `import foo from "mod" with { type: "json" }`;."""
         self.type = Syntax.ImportDeclaration
         self.specifiers = specifiers
         self.source = source
+        self.attributes = attributes
 
 
 class ImportDefaultSpecifier(ModuleSpecifier):
