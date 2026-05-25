@@ -706,13 +706,13 @@ class Parser(object):
         token = self.nextToken()
 
         typ = token.type
-        if typ in Token.NumericLiteral:
+        if typ is Token.NumericLiteral:
             if self.context.strict and token.octal:
                 self.tolerateUnexpectedToken(token, Messages.StrictOctalLiteral)
             raw = self.getTokenRaw(token)
             key = self.finalize(node, Node.NumericLiteral(token.value, raw))
 
-        if typ is Token.StringLiteral:
+        elif typ is Token.StringLiteral:
             raw = self.getTokenRaw(token)
             key = self.finalize(node, Node.StringLiteral(token.value, raw))
 
@@ -739,7 +739,7 @@ class Parser(object):
     def isPropertyKey(self, key, value):
         return (
             (key.type is Syntax.Identifier and key.name == value) or
-            (key.type is Syntax.Literal and key.value == value)
+            (key.type is Syntax.StringLiteral and key.value == value)
         )
 
     def parseObjectProperty(self, hasProto):
@@ -2665,7 +2665,7 @@ class Parser(object):
 
         node = self.createNode()
         expr = self.parseExpression()
-        directive = self.getTokenRaw(token)[1:-1] if expr.type is Syntax.Literal else None
+        directive = self.getTokenRaw(token)[1:-1] if expr.type is Syntax.StringLiteral else None
         self.consumeSemicolon()
 
         return self.finalize(node, Node.Directive(expr, directive) if directive else Node.ExpressionStatement(expr))
@@ -2807,6 +2807,10 @@ class Parser(object):
 
         if self.match('*'):
             self.nextToken()
+            computed = self.match('[')
+            key = self.parseObjectPropertyKey()
+            value = self.parseGeneratorMethod()
+            kind = 'method'
 
         else:
             computed = self.match('[')
@@ -2880,7 +2884,14 @@ class Parser(object):
                 kind = 'constructor'
 
         if kind in ('constructor', 'method', 'get', 'set'):
-            return self.finalize(node, Node.ClassMethod(key, computed, value, kind, isStatic))
+            return self.finalize(node, Node.ClassMethod(
+                key, computed,
+                value.generator if value else False,
+                value.is_async if value else False,
+                value.params if value else [],
+                value.body if value else None,
+                kind, isStatic
+            ))
         else:
             return self.finalize(node, Node.FieldDefinition(key, computed, value, kind, isStatic))
 

@@ -617,7 +617,7 @@ class ClassMethod(Function):
     def __init__(self, key, computed, generator, is_async, params, body, kind, isStatic, decorators=None):
         # type: (Expression, bool, bool, bool, List[Pattern], BlockStatement, str, bool, Optional[List[Decorator]]) -> None
         """A class method declaration."""
-        Function.__init__(self, generator=generator, is_async=is_async, params=params, body=body)
+        Function.__init__(self, id=None, generator=generator, is_async=is_async, params=params, body=body)
         self.type = Syntax.ClassMethod
         self.key = key
         self.computed = computed
@@ -669,6 +669,19 @@ class ObjectExpression(Expression):
         """An object expression."""
         self.type = Syntax.ObjectExpression
         self.properties = properties
+
+
+class Property(Node):
+    def __init__(self, kind, key, computed, value, method, shorthand):
+        # type: (str, Expression, bool, Optional[Expression], bool, bool) -> None
+        """An object property (ESTree compatible)."""
+        self.type = Syntax.ObjectProperty
+        self.kind = kind  # "init" | "get" | "set"
+        self.key = key
+        self.computed = computed
+        self.value = value
+        self.method = method
+        self.shorthand = shorthand
 
 
 class ObjectMember(Node):
