@@ -1649,8 +1649,16 @@ class Parser(object):
                 statement = self.parseClassDeclaration()
             elif value == 'let':
                 statement = self.parseLexicalDeclaration(Params(inFor=False)) if self.isLexicalDeclaration() else self.parseStatement()
+            elif value == 'await':
+                # await using x = expr; (ES2025) — handled by parseStatement
+                statement = self.parseStatement()
             else:
                 statement = self.parseStatement()
+        elif self.lookahead.type is Token.Identifier and self.lookahead.value == 'using':
+            statement = self.parseUsingDeclaration(isAsync=False)
+        elif self.lookahead.type is Token.Identifier and self.lookahead.value == 'await' and self.isAwaitUsing():
+            # ES2025: await using x = expr; (await is Identifier in modules)
+            statement = self.parseUsingDeclaration(isAsync=True)
         else:
             statement = self.parseStatement()
 
@@ -1901,6 +1909,21 @@ class Parser(object):
         self.consumeSemicolon()
 
         return self.finalize(node, Node.VariableDeclaration(declarations, 'var'))
+
+    def parseUsingDeclaration(self, isAsync=False):
+        """ES2025: using x = expr; or await using x = expr;"""
+        node = self.createNode()
+        if isAsync:
+            # 'await' is a contextual keyword (Identifier) in modules
+            token = self.nextToken()
+            if token.type not in (Token.Keyword, Token.Identifier) or token.value != 'await':
+                self.throwUnexpectedToken(token)
+        token = self.nextToken()
+        if token.type is not Token.Identifier or token.value != 'using':
+            self.throwUnexpectedToken(token)
+        declarations = self.parseVariableDeclarationList(Params(inFor=False))
+        self.consumeSemicolon()
+        return self.finalize(node, Node.VariableDeclaration(declarations, 'using'))
 
     # https://tc39.github.io/ecma262/#sec-empty-statement
 
@@ -2399,7 +2422,13 @@ class Parser(object):
                 statement = self.parseExpressionStatement()
 
         elif typ is Token.Identifier:
-            statement = self.parseFunctionDeclaration() if self.matchAsyncFunction() else self.parseLabelledStatement()
+            if self.matchContextualKeyword('using'):
+                statement = self.parseUsingDeclaration(isAsync=False)
+            elif self.matchContextualKeyword('await') and self.isAwaitUsing():
+                # ES2025: await using x = expr; (await is Identifier in modules)
+                statement = self.parseUsingDeclaration(isAsync=True)
+            else:
+                statement = self.parseFunctionDeclaration() if self.matchAsyncFunction() else self.parseLabelledStatement()
 
         elif typ is Token.Keyword:
             value = self.lookahead.value
@@ -2427,6 +2456,9 @@ class Parser(object):
                 statement = self.parseTryStatement()
             elif value == 'var':
                 statement = self.parseVariableStatement()
+            elif value == 'await':
+                # ES2025: await using x = expr;
+                statement = self.parseUsingDeclaration(isAsync=True)
             elif value == 'while':
                 statement = self.parseWhileStatement()
             elif value == 'with':
@@ -2551,6 +2583,14 @@ class Parser(object):
             match = (state.lineNumber == next.lineNumber) and (next.type is Token.Keyword) and (next.value == 'function')
 
         return match
+
+    def isAwaitUsing(self):
+        """Check if current 'await' token is followed by 'using' (ES2025 await using declaration)."""
+        state = self.scanner.saveState()
+        self.scanner.scanComments()
+        next = self.scanner.lex()
+        self.scanner.restoreState(state)
+        return next.type is Token.Identifier and next.value == 'using'
 
     def parseFunctionDeclaration(self, identifierIsOptional=False):
         node = self.createNode()
