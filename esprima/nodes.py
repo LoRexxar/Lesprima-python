@@ -266,8 +266,16 @@ class Class(Node):
 
 class ClassBody(Node):
     def __init__(self, body):
-        # type: (List[ClassMethod, ClassProperty, ClassPrivateProperty]) -> None
+        # type: (List[ClassMethod, ClassProperty, ClassPrivateProperty, StaticBlock]) -> None
         self.type = Syntax.ClassBody
+        self.body = body
+
+
+class StaticBlock(Node):
+    def __init__(self, body):
+        # type: (List[Statement]) -> None
+        """ES2022: Static initialization block `static { ... }`."""
+        self.type = Syntax.StaticBlock
         self.body = body
 
 

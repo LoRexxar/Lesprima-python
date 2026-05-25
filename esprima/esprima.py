@@ -42,6 +42,9 @@ def parse(code, options=None, delegate=None, **kwargs):
     options = {} if options is None else options.copy()
     options.update(kwargs)
 
+    # Enable ES2022+ class features by default
+    options.setdefault('classProperties', True)
+
     commentHandler = None
 
     def proxyDelegate(node, metadata):

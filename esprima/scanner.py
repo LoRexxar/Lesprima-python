@@ -111,6 +111,21 @@ class Scanner(object):
         self.lineStart = 0
         self.curlyStack = []
 
+        # ES2023: Hashbang grammar — skip #! at the very start of input
+        if self.length >= 2 and code[0] == '#' and code[1] == '!':
+            # Skip the entire first line
+            idx = 2
+            while idx < self.length and code[idx] not in ('\r', '\n', '\u2028', '\u2029'):
+                idx += 1
+            if idx < self.length:
+                if code[idx] == '\r' and idx + 1 < self.length and code[idx + 1] == '\n':
+                    idx += 2
+                else:
+                    idx += 1
+            self.index = idx
+            self.lineNumber = 2
+            self.lineStart = idx
+
     def saveState(self):
         return ScannerState(
             index=self.index,
@@ -577,9 +592,14 @@ class Scanner(object):
         elif str == '?':
             self.index += 1
             if self.source[self.index:self.index + 1] == '?':
-                # Nullish coalescing: ??
-                self.index += 1
-                str = '??'
+                if self.source[self.index + 1:self.index + 2] == '=':
+                    # Logical nullish assignment: ??=
+                    self.index += 2
+                    str = '??='
+                else:
+                    # Nullish coalescing: ??
+                    self.index += 1
+                    str = '??'
             elif self.source[self.index:self.index + 1] == '.':
                 # Optional chaining: ?.
                 # Only if not followed by a digit (e.g., ?.9 is ? followed by .9)
@@ -598,7 +618,8 @@ class Scanner(object):
                 str = str[:3]
                 if str in (
                     '===', '!==', '>>>',
-                    '<<=', '>>=', '**='
+                    '<<=', '>>=', '**=',
+                    '&&=', '||=', '??='
                 ):
                     self.index += 3
                 else:
@@ -638,7 +659,11 @@ class Scanner(object):
         num = ''
 
         while not self.eof():
-            if not Character.isHexDigit(self.source[self.index]):
+            ch = self.source[self.index]
+            if ch == '_':
+                self.index += 1
+                continue
+            if not Character.isHexDigit(ch):
                 break
 
             num += self.source[self.index]
@@ -647,7 +672,7 @@ class Scanner(object):
         if len(num) == 0:
             self.throwUnexpectedToken()
 
-        if Character.isIdentifierStart(self.source[self.index]):
+        if Character.isIdentifierStart(self.source[self.index]) or self.source[self.index] == '_':
             self.throwUnexpectedToken()
 
         return RawToken(
@@ -664,6 +689,9 @@ class Scanner(object):
 
         while not self.eof():
             ch = self.source[self.index]
+            if ch == '_':
+                self.index += 1
+                continue
             if ch != '0' and ch != '1':
                 break
 
@@ -676,7 +704,7 @@ class Scanner(object):
 
         if not self.eof():
             ch = self.source[self.index]
-            if Character.isIdentifierStart(ch) or Character.isDecimalDigit(ch):
+            if Character.isIdentifierStart(ch) or Character.isDecimalDigit(ch) or ch == '_':
                 self.throwUnexpectedToken()
 
         return RawToken(
@@ -698,7 +726,11 @@ class Scanner(object):
         self.index += 1
 
         while not self.eof():
-            if not Character.isOctalDigit(self.source[self.index]):
+            ch = self.source[self.index]
+            if ch == '_':
+                self.index += 1
+                continue
+            if not Character.isOctalDigit(ch):
                 break
 
             num += self.source[self.index]
@@ -708,7 +740,8 @@ class Scanner(object):
             # only 0o or 0O
             self.throwUnexpectedToken()
 
-        if Character.isIdentifierStart(self.source[self.index]) or Character.isDecimalDigit(self.source[self.index]):
+        ch = self.source[self.index]
+        if Character.isIdentifierStart(ch) or Character.isDecimalDigit(ch) or ch == '_':
             self.throwUnexpectedToken()
 
         return RawToken(
@@ -763,7 +796,13 @@ class Scanner(object):
                     if self.isImplicitOctalLiteral():
                         return self.scanOctalLiteral(ch, start)
 
-            while Character.isDecimalDigit(self.source[self.index]):
+            while True:
+                ch = self.source[self.index]
+                if ch == '_':
+                    self.index += 1
+                    continue
+                if not Character.isDecimalDigit(ch):
+                    break
                 num += self.source[self.index]
                 self.index += 1
 
@@ -772,7 +811,13 @@ class Scanner(object):
         if ch == '.':
             num += self.source[self.index]
             self.index += 1
-            while Character.isDecimalDigit(self.source[self.index]):
+            while True:
+                ch = self.source[self.index]
+                if ch == '_':
+                    self.index += 1
+                    continue
+                if not Character.isDecimalDigit(ch):
+                    break
                 num += self.source[self.index]
                 self.index += 1
 
@@ -787,8 +832,14 @@ class Scanner(object):
                 num += self.source[self.index]
                 self.index += 1
 
-            if Character.isDecimalDigit(self.source[self.index]):
-                while Character.isDecimalDigit(self.source[self.index]):
+            if Character.isDecimalDigit(self.source[self.index]) or self.source[self.index] == '_':
+                while True:
+                    ch = self.source[self.index]
+                    if ch == '_':
+                        self.index += 1
+                        continue
+                    if not Character.isDecimalDigit(ch):
+                        break
                     num += self.source[self.index]
                     self.index += 1
 
@@ -1200,6 +1251,10 @@ class Scanner(object):
                 return self.scanNumericLiteral()
 
             return self.scanPunctuator()
+
+        # Private identifier starts with # (U+0023) followed by identifier start.
+        if ch == '#':
+            return self.scanPrivateIdentifier()
 
         if Character.isDecimalDigit(ch):
             return self.scanNumericLiteral()

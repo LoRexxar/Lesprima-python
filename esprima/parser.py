@@ -452,7 +452,7 @@ class Parser(object):
             return False
 
         op = self.lookahead.value
-        return op in ('=', '*=', '**=', '/=', '%=', '+=', '-=', '<<=', '>>=', '>>>=', '&=', '^=', '|=')
+        return op in ('=', '*=', '**=', '/=', '%=', '+=', '-=', '<<=', '>>=', '>>>=', '&=', '^=', '|=', '&&=', '||=', '??=')
 
     # Cover grammar support.
     #
@@ -2816,14 +2816,25 @@ class Parser(object):
             computed = self.match('[')
             key = self.parseObjectPropertyKey()
             id = key
-            if id.name == 'static' and (self.qualifiedPropertyName(self.lookahead) or self.match('*')):
-                token = self.lookahead
-                isStatic = True
-                computed = self.match('[')
-                if self.match('*'):
+            if hasattr(id, 'name') and id.name == 'static':
+                if self.match('{'):
+                    # ES2022: Static initialization block
                     self.nextToken()
-                else:
-                    key = self.parseObjectPropertyKey()
+                    body = self.parseDirectivePrologues()
+                    while self.lookahead.type is not Token.EOF:
+                        if self.match('}'):
+                            break
+                        body.append(self.parseStatementListItem())
+                    self.expect('}')
+                    return self.finalize(node, Node.StaticBlock(body))
+                elif self.qualifiedPropertyName(self.lookahead) or self.match('*'):
+                    token = self.lookahead
+                    isStatic = True
+                    computed = self.match('[')
+                    if self.match('*'):
+                        self.nextToken()
+                    else:
+                        key = self.parseObjectPropertyKey()
             if token.type is Token.Identifier and not self.hasLineTerminator and token.value == 'async':
                 punctuator = self.lookahead.value
                 if punctuator != ':' and punctuator != '(' and punctuator != '*':
@@ -2893,7 +2904,7 @@ class Parser(object):
                 kind, isStatic
             ))
         else:
-            return self.finalize(node, Node.FieldDefinition(key, computed, value, kind, isStatic))
+            return self.finalize(node, Node.ClassProperty(key, computed, value, isStatic))
 
     def parseClassElementList(self):
         body = []
@@ -2954,6 +2965,7 @@ class Parser(object):
     def parseModule(self):
         self.context.strict = True
         self.context.isModule = True
+        self.context.allow_await = True
         node = self.createNode()
         body = self.parseDirectivePrologues()
         while self.lookahead.type is not Token.EOF:
