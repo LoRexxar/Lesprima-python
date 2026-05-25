@@ -33,6 +33,11 @@ class JSXClosingElement(Node):
         self.name = name
 
 
+class JSXClosingFragment(Node):
+    def __init__(self):
+        self.type = JSXSyntax.JSXClosingFragment
+
+
 class JSXElement(Node):
     def __init__(self, openingElement, children, closingElement):
         self.type = JSXSyntax.JSXElement
@@ -85,6 +90,12 @@ class JSXOpeningElement(Node):
         self.name = name
         self.selfClosing = selfClosing
         self.attributes = attributes
+
+
+class JSXOpeningFragment(Node):
+    def __init__(self, selfClosing=False):
+        self.type = JSXSyntax.JSXOpeningFragment
+        self.selfClosing = selfClosing
 
 
 class JSXSpreadAttribute(Node):

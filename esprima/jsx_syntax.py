@@ -27,6 +27,7 @@ from __future__ import unicode_literals
 class JSXSyntax:
     JSXAttribute = "JSXAttribute"
     JSXClosingElement = "JSXClosingElement"
+    JSXClosingFragment = "JSXClosingFragment"
     JSXElement = "JSXElement"
     JSXEmptyExpression = "JSXEmptyExpression"
     JSXExpressionContainer = "JSXExpressionContainer"
@@ -34,5 +35,6 @@ class JSXSyntax:
     JSXMemberExpression = "JSXMemberExpression"
     JSXNamespacedName = "JSXNamespacedName"
     JSXOpeningElement = "JSXOpeningElement"
+    JSXOpeningFragment = "JSXOpeningFragment"
     JSXSpreadAttribute = "JSXSpreadAttribute"
     JSXText = "JSXText"

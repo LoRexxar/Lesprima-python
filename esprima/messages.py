@@ -88,3 +88,6 @@ class Messages:
     UnexpectedTokenIllegal = "Unexpected token ILLEGAL"
     UnknownLabel = "Undefined label '%0'"
     UnterminatedRegExp = "Invalid regular expression: missing /"
+    CannotUseImportMetaOutsideAModule = "The keyword 'import.meta' is only allowed in module code"
+    NullishCoalescingNotAllowed = "Nullish coalescing operator(??) requires parens when mixed with logical operators"
+    InvalidTaggedTemplateOnOptionalChain = "Invalid tagged template on optional chain"

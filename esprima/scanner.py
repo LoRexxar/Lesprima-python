@@ -69,7 +69,7 @@ class Comment(Object):
 
 
 class RawToken(Object):
-    def __init__(self, type=None, value=None, pattern=None, flags=None, regex=None, octal=None, cooked=None, head=None, tail=None, lineNumber=None, lineStart=None, start=None, end=None):
+    def __init__(self, type=None, value=None, pattern=None, flags=None, regex=None, octal=None, cooked=None, head=None, tail=None, lineNumber=None, lineStart=None, start=None, end=None, notEscapeSequenceHead=None):
         self.type = type
         self.value = value
         self.pattern = pattern
@@ -83,6 +83,7 @@ class RawToken(Object):
         self.lineStart = lineStart
         self.start = start
         self.end = end
+        self.notEscapeSequenceHead = notEscapeSequenceHead
 
 
 class ScannerState(Object):
@@ -569,10 +570,22 @@ class Scanner(object):
             '[',
             ']',
             ':',
-            '?',
             '~',
         ):
             self.index += 1
+
+        elif str == '?':
+            self.index += 1
+            if self.source[self.index:self.index + 1] == '?':
+                # Nullish coalescing: ??
+                self.index += 1
+                str = '??'
+            elif self.source[self.index:self.index + 1] == '.':
+                # Optional chaining: ?.
+                # Only if not followed by a digit (e.g., ?.9 is ? followed by .9)
+                if not self.source[self.index + 1:self.index + 2].isdigit():
+                    self.index += 1
+                    str = '?.'
 
         else:
             # 4-character punctuator.
@@ -894,6 +907,7 @@ class Scanner(object):
         cooked = ''
         terminated = False
         start = self.index
+        notEscapeSequenceHead = None
 
         head = self.source[start] == '`'
         tail = False
@@ -921,7 +935,10 @@ class Scanner(object):
                 ch = self.source[self.index]
                 self.index += 1
                 if not Character.isLineTerminator(ch):
-                    if ch == 'n':
+                    if notEscapeSequenceHead is not None:
+                        # Already in invalid escape state, skip processing
+                        pass
+                    elif ch == 'n':
                         cooked += '\n'
                     elif ch == 'r':
                         cooked += '\r'
@@ -938,14 +955,16 @@ class Scanner(object):
                                 cooked += unescaped
                             else:
                                 self.index = restore
-                                cooked += ch
+                                notEscapeSequenceHead = self.index - 2
+                                cooked = None
 
                     elif ch == 'x':
                         unescaped = self.scanHexEscape(ch)
                         if not unescaped:
-                            self.throwUnexpectedToken(Messages.InvalidHexEscapeSequence)
-
-                        cooked += unescaped
+                            notEscapeSequenceHead = self.index - 2
+                            cooked = None
+                        else:
+                            cooked += unescaped
                     elif ch == 'b':
                         cooked += '\b'
                     elif ch == 'f':
@@ -957,12 +976,14 @@ class Scanner(object):
                         if ch == '0':
                             if Character.isDecimalDigit(self.source[self.index]):
                                 # Illegal: \01 \02 and so on
-                                self.throwUnexpectedToken(Messages.TemplateOctalLiteral)
-
-                            cooked += '\0'
+                                notEscapeSequenceHead = self.index - 2
+                                cooked = None
+                            else:
+                                cooked += '\0'
                         elif Character.isOctalDigit(ch):
                             # Illegal: \1 \2
-                            self.throwUnexpectedToken(Messages.TemplateOctalLiteral)
+                            notEscapeSequenceHead = self.index - 2
+                            cooked = None
                         else:
                             cooked += ch
 
@@ -979,9 +1000,11 @@ class Scanner(object):
                     self.index += 1
 
                 self.lineStart = self.index
-                cooked += '\n'
+                if cooked is not None:
+                    cooked += '\n'
             else:
-                cooked += ch
+                if cooked is not None:
+                    cooked += ch
 
         if not terminated:
             self.throwUnexpectedToken()
@@ -993,13 +1016,14 @@ class Scanner(object):
         return RawToken(
             type=Token.Template,
             value=self.source[start + 1:self.index - rawOffset],
-            cooked=cooked,
+            cooked=cooked if notEscapeSequenceHead is None else None,
             head=head,
             tail=tail,
             lineNumber=self.lineNumber,
             lineStart=self.lineStart,
             start=start,
-            end=self.index
+            end=self.index,
+            notEscapeSequenceHead=notEscapeSequenceHead
         )
 
     # https://tc39.github.io/ecma262/#sec-literals-regular-expression-literals

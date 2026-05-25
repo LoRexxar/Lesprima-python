@@ -77,12 +77,12 @@ class Decorator(Node):
 
 
 class Function(Node):
-    def __init__(self, id, generator, async, params, body):
+    def __init__(self, id, generator, is_async, params, body):
         # type: (Optional[Identifier], bool, bool, List[Pattern], BlockStatement) -> None
         """A function declaration or expression."""
         self.id = id
         self.generator = generator
-        self.async = async
+        self.is_async = is_async
         self.params = params
         self.body = body
 
@@ -93,7 +93,7 @@ class FunctionDeclaration(Function, Declaration):
         """A function declaration. Note that unlike in the parent interface
         `Function`, the `id` cannot be `null`, except when this is the child of
         an `ExportDefaultDeclaration`."""
-        Function.__init__(self, id=id, generator=generator, async=False, params=params, body=body)
+        Function.__init__(self, id=id, generator=generator, is_async=False, params=params, body=body)
         self.type = Syntax.FunctionDeclaration
         self.expression = False
 
@@ -117,7 +117,7 @@ class ArrowFunctionExpression(Function, Expression):
     def __init__(self, params, body, expression):
         # type: (List[Pattern], Union[BlockStatement, Expression], bool) -> None
         """A fat arrow function expression, e.g., `let foo = (bar) => { /* body */ }`."""
-        Function.__init__(self, id=None, generator=False, async=False, params=params, body=body)
+        Function.__init__(self, id=None, generator=False, is_async=False, params=params, body=body)
         self.type = Syntax.ArrowFunctionExpression
         self.expression = expression
 
@@ -146,27 +146,27 @@ class AsyncArrowFunctionExpression(Function, Expression):
     def __init__(self, params, body, expression):
         # type: (List[Pattern], Union[BlockStatement, Expression], bool) -> None
         """A fat arrow async function expression, e.g., `let foo = async (bar) => { /* body */ }`."""
-        Function.__init__(self, id=None, generator=False, async=True, params=params, body=body)
+        Function.__init__(self, id=None, generator=False, is_async=True, params=params, body=body)
         self.type = Syntax.ArrowFunctionExpression
         self.expression = expression
 
 
 class AsyncFunctionDeclaration(Function, Declaration):
-    def __init__(self, id, params, body):
-        # type: (Identifier, List[Pattern], BlockStatement) -> None
+    def __init__(self, id, params, body, generator=False):
+        # type: (Identifier, List[Pattern], BlockStatement, bool) -> None
         """An async function declaration. Note that unlike in the parent
         interface `Function`, the `id` cannot be `null`, except when this
         is the child of an `ExportDefaultDeclaration`."""
-        Function.__init__(self, id=id, generator=False, async=True, params=params, body=body)
+        Function.__init__(self, id=id, generator=generator, is_async=True, params=params, body=body)
         self.type = Syntax.FunctionDeclaration
         self.expression = False
 
 
 class AsyncFunctionExpression(Function, Expression):
-    def __init__(self, id, params, body):
-        # type: (Identifier, List[Pattern], BlockStatement) -> None
+    def __init__(self, id, params, body, generator=False):
+        # type: (Identifier, List[Pattern], BlockStatement, bool) -> None
         """An async function expression."""
-        Function.__init__(self, id=id, generator=False, async=True, params=params, body=body)
+        Function.__init__(self, id=id, generator=generator, is_async=True, params=params, body=body)
         self.type = Syntax.FunctionExpression
         self.expression = False
 
@@ -217,6 +217,14 @@ class BreakStatement(Statement):
         """A `break` statement."""
         self.type = Syntax.BreakStatement
         self.label = label
+
+
+class ChainExpression(Expression):
+    def __init__(self, expression):
+        # type: (Expression) -> None
+        """A chain expression wrapping optional chaining operations."""
+        self.type = Syntax.ChainExpression
+        self.expression = expression
 
 
 class CallExpression(Expression):
@@ -432,10 +440,11 @@ class ForInStatement(Statement):
 
 
 class ForOfStatement(ForInStatement):
-    def __init__(self, left, right, body):
-        # type: (Union[VariableDeclaration, Expression], Optional[Expression], Statement) -> None
+    def __init__(self, left, right, body, _await=False):
+        # type: (Union[VariableDeclaration, Expression], Optional[Expression], Statement, bool) -> None
         ForInStatement.__init__(self, left=left, right=right, body=body)
         self.type = Syntax.ForOfStatement
+        self.is_await = _await
 
 
 class ForStatement(Statement):
@@ -453,7 +462,7 @@ class FunctionExpression(Function, Expression):
     def __init__(self, id, params, body, generator):
         # type: (Identifier, List[Pattern], BlockStatement, bool) -> None
         """A function expression."""
-        Function.__init__(self, id=id, generator=generator, async=False, params=params, body=body)
+        Function.__init__(self, id=id, generator=generator, is_async=False, params=params, body=body)
         self.type = Syntax.FunctionExpression
         self.expression = False
 
@@ -605,10 +614,10 @@ class MetaProperty(Node):
 
 class ClassMethod(Function):
     # Originally named MethodDefinition in esprima
-    def __init__(self, key, computed, generator, async, params, body, kind, isStatic, decorators=None):
+    def __init__(self, key, computed, generator, is_async, params, body, kind, isStatic, decorators=None):
         # type: (Expression, bool, bool, bool, List[Pattern], BlockStatement, str, bool, Optional[List[Decorator]]) -> None
         """A class method declaration."""
-        Function.__init__(self, generator=generator, async=async, params=params, body=body)
+        Function.__init__(self, generator=generator, is_async=is_async, params=params, body=body)
         self.type = Syntax.ClassMethod
         self.key = key
         self.computed = computed
@@ -682,7 +691,7 @@ class ObjectProperty(ObjectMember):
 
 
 class ObjectMethod(ObjectMember, Function):
-    def __init__(self, kind, key, computed, generator, async, params, body):
+    def __init__(self, kind, key, computed, generator, is_async, params, body):
         # type: (str, Expression, bool, bool, bool, List[Pattern], BlockStatement) -> None
         """An object method."""
         ObjectMember.__init__(self, key=key, computed=computed)
@@ -923,14 +932,14 @@ class ArrowParameterPlaceHolder(Node):
     def __init__(self, params):
         self.type = Syntax.ArrowParameterPlaceHolder
         self.params = params
-        self.async = False
+        self.is_async = False
 
 
 class AsyncArrowParameterPlaceHolder(Node):
     def __init__(self, params):
         self.type = Syntax.ArrowParameterPlaceHolder
         self.params = params
-        self.async = True
+        self.is_async = True
 
 
 class BlockComment(Node):

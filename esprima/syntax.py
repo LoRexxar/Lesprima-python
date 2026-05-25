@@ -104,6 +104,7 @@ class Syntax:
     LineComment = "LineComment"
 
     BindExpression = "BindExpression"
+    ChainExpression = "ChainExpression"
     DoExpression = "DoExpression"
     ClassPrivate = "ClassPrivate"
     ClassPrivateProperty = "ClassPrivateProperty"

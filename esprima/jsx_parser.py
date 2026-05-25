@@ -441,6 +441,12 @@ class JSXParser(Parser):
         node = self.createJSXNode()
 
         self.expectJSX('<')
+        # Fragment: <>...</>
+        if self.matchJSX('>'):
+            selfClosing = False
+            self.expectJSX('>')
+            return self.finalize(node, JSXNode.JSXOpeningFragment(selfClosing))
+
         name = self.parseJSXElementName()
         attributes = self.parseJSXAttributes()
         selfClosing = self.matchJSX('/')
@@ -457,9 +463,19 @@ class JSXParser(Parser):
         self.expectJSX('<')
         if self.matchJSX('/'):
             self.expectJSX('/')
+            # Fragment closing: </>
+            if self.matchJSX('>'):
+                self.expectJSX('>')
+                return self.finalize(node, JSXNode.JSXClosingFragment())
             name = self.parseJSXElementName()
             self.expectJSX('>')
             return self.finalize(node, JSXNode.JSXClosingElement(name))
+
+        # Fragment opening: <>
+        if self.matchJSX('>'):
+            selfClosing = False
+            self.expectJSX('>')
+            return self.finalize(node, JSXNode.JSXOpeningFragment(selfClosing))
 
         name = self.parseJSXElementName()
         attributes = self.parseJSXAttributes()
@@ -547,6 +563,29 @@ class JSXParser(Parser):
                     stack.pop()
                 else:
                     break
+
+            if element.type is JSXSyntax.JSXClosingFragment:
+                el.closing = element
+                if el.opening.type != JSXSyntax.JSXOpeningFragment:
+                    self.tolerateError('Expected corresponding JSX closing fragment for opening fragment')
+
+                if stack:
+                    child = self.finalize(el.node, JSXNode.JSXElement(el.opening, el.children, el.closing))
+                    el = stack[-1]
+                    el.children.append(child)
+                    stack.pop()
+                else:
+                    break
+
+            if element.type is JSXSyntax.JSXOpeningFragment:
+                opening = element
+                stack.append(el)
+                el = MetaJSXElement(
+                    node=node,
+                    opening=opening,
+                    closing=None,
+                    children=[],
+                )
 
         return el
 
