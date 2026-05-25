@@ -595,6 +595,12 @@ class Parser(object):
             else:
                 expr = self.throwUnexpectedToken(self.nextToken())
 
+        elif typ is Token.PrivateIdentifier:
+            self.context.isAssignmentTarget = False
+            self.context.isBindingElement = False
+            token = self.nextToken()
+            expr = self.finalize(node, Node.PrivateIdentifier(token.value))
+
         elif typ is Token.Keyword:
             if not self.context.strict and self.context.allowYield and self.matchKeyword('yield'):
                 expr = self.parseIdentifierName()
@@ -723,6 +729,9 @@ class Parser(object):
             Token.Keyword,
         ):
             key = self.finalize(node, Node.Identifier(token.value))
+
+        elif typ is Token.PrivateIdentifier:
+            key = self.finalize(node, Node.PrivateIdentifier(token.value))
 
         elif typ is Token.Punctuator:
             if token.value == '[':
@@ -1175,7 +1184,10 @@ class Parser(object):
                 self.context.isAssignmentTarget = not optional
                 if not optional:
                     self.expect('.')
-                property = self.parseIdentifierName()
+                if self.lookahead.type is Token.PrivateIdentifier:
+                    property = self.finalize(self.createNode(), Node.PrivateIdentifier(self.nextToken().value))
+                else:
+                    property = self.parseIdentifierName()
                 expr = self.finalize(self.startNode(startToken), Node.StaticMemberExpression(expr, property, optional))
 
             else:
@@ -1227,7 +1239,10 @@ class Parser(object):
                 self.context.isAssignmentTarget = not optional
                 if not optional:
                     self.expect('.')
-                property = self.parseIdentifierName()
+                if self.lookahead.type is Token.PrivateIdentifier:
+                    property = self.finalize(self.createNode(), Node.PrivateIdentifier(self.nextToken().value))
+                else:
+                    property = self.parseIdentifierName()
                 expr = self.finalize(node, Node.StaticMemberExpression(expr, property, optional))
 
             elif self.lookahead.type is Token.Template and self.lookahead.head:
@@ -2708,6 +2723,7 @@ class Parser(object):
             Token.NullLiteral,
             Token.NumericLiteral,
             Token.Keyword,
+            Token.PrivateIdentifier,
         ):
             return True
         elif typ is Token.Punctuator:
@@ -2874,6 +2890,20 @@ class Parser(object):
             computed = self.match('[')
             key = self.parseObjectPropertyKey()
             value = self.parseGeneratorMethod()
+
+        elif token.type is Token.PrivateIdentifier:
+            # ES2022: Private field or method
+            if self.match('('):
+                # Private method
+                kind = 'method'
+                value = self.parsePropertyMethodFunction()
+            elif self.config.classProperties:
+                # Private field
+                kind = 'init'
+                if self.match('='):
+                    self.context.firstCoverInitializedNameError = self.lookahead
+                    self.nextToken()
+                    value = self.isolateCoverGrammar(self.parseAssignmentExpression)
 
         if not kind and key and self.match('('):
             kind = 'method'

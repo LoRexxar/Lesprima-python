@@ -483,11 +483,11 @@ class Identifier(Expression, Pattern):
         self.name = name
 
 
-class PrivateName(Expression, Pattern):
+class PrivateIdentifier(Expression, Pattern):
     def __init__(self, name):
-        # type: (Identifier) -> None
-        """A Private Name Identifier."""
-        self.type = Syntax.Identifier
+        # type: (str) -> None
+        """ES2022: A private identifier (#name)."""
+        self.type = Syntax.PrivateIdentifier
         self.name = name
 
 

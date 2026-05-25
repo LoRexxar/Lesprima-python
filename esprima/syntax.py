@@ -79,6 +79,7 @@ class Syntax:
     ObjectPattern = "ObjectPattern"
     Program = "Program"
     ObjectProperty = "ObjectProperty"  # "Property"
+    PrivateIdentifier = "PrivateIdentifier"
     ObjectMethod = "ObjectMethod"  # "Property"
     RestElement = "RestElement"
     ReturnStatement = "ReturnStatement"

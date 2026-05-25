@@ -550,6 +550,28 @@ class Scanner(object):
             end=self.index
         )
 
+    def scanPrivateIdentifier(self):
+        """Scan a private identifier: #identifier (ES2022)."""
+        start = self.index
+        self.index += 1  # skip #
+
+        # Must be followed by a valid identifier start
+        ch = self.source[self.index] if not self.eof() else ''
+        if not Character.isIdentifierStart(ch):
+            self.tolerateUnexpectedToken()
+
+        id = self.getIdentifier()
+        value = '#' + id
+
+        return RawToken(
+            type=Token.PrivateIdentifier,
+            value=value,
+            lineNumber=self.lineNumber,
+            lineStart=self.lineStart,
+            start=start,
+            end=self.index
+        )
+
     # https://tc39.github.io/ecma262/#sec-punctuators
 
     def scanPunctuator(self):
