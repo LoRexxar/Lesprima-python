@@ -592,6 +592,9 @@ class Parser(object):
                 token = self.nextRegexToken()
                 raw = self.getTokenRaw(token)
                 expr = self.finalize(node, Node.RegExpLiteral(token.pattern, token.flags, raw))
+            elif value == '@':
+                # Decorator followed by class expression
+                expr = self.parseClassExpression()
             else:
                 expr = self.throwUnexpectedToken(self.nextToken())
 
@@ -1659,6 +1662,9 @@ class Parser(object):
         elif self.lookahead.type is Token.Identifier and self.lookahead.value == 'await' and self.isAwaitUsing():
             # ES2025: await using x = expr; (await is Identifier in modules)
             statement = self.parseUsingDeclaration(isAsync=True)
+        elif self.lookahead.type is Token.Punctuator and self.lookahead.value == '@':
+            # Decorator followed by class declaration
+            statement = self.parseClassDeclaration()
         else:
             statement = self.parseStatement()
 
@@ -2850,6 +2856,21 @@ class Parser(object):
 
     # https://tc39.github.io/ecma262/#sec-class-definitions
 
+    def parseDecorator(self):
+        """Parse a single decorator: @expr or @expr(args)"""
+        node = self.createNode()
+        self.expect('@')
+        # Parse the decorator expression (identifier, member access, or call)
+        expr = self.parseLeftHandSideExpressionAllowCall()
+        return self.finalize(node, Node.Decorator(expr))
+
+    def parseDecoratorList(self):
+        """Parse a list of decorators before a class or class element."""
+        decorators = []
+        while self.match('@'):
+            decorators.append(self.parseDecorator())
+        return decorators
+
     def parseClassElement(self, hasConstructor):
         token = self.lookahead
         node = self.createNode()
@@ -2985,7 +3006,13 @@ class Parser(object):
             if self.match(';'):
                 self.nextToken()
             else:
-                body.append(self.parseClassElement(hasConstructor))
+                decorators = self.parseDecoratorList()
+                element = self.parseClassElement(hasConstructor)
+                # Attach decorators to the element
+                if decorators:
+                    if hasattr(element, 'decorators'):
+                        element.decorators = decorators
+                body.append(element)
         self.expect('}')
 
         return body
@@ -2999,6 +3026,8 @@ class Parser(object):
     def parseClassDeclaration(self, identifierIsOptional=False):
         node = self.createNode()
 
+        decorators = self.parseDecoratorList()
+
         previousStrict = self.context.strict
         self.context.strict = True
         self.expectKeyword('class')
@@ -3011,10 +3040,12 @@ class Parser(object):
         classBody = self.parseClassBody()
         self.context.strict = previousStrict
 
-        return self.finalize(node, Node.ClassDeclaration(id, superClass, classBody))
+        return self.finalize(node, Node.ClassDeclaration(id, superClass, classBody, decorators=decorators))
 
     def parseClassExpression(self):
         node = self.createNode()
+
+        decorators = self.parseDecoratorList()
 
         previousStrict = self.context.strict
         self.context.strict = True
@@ -3027,7 +3058,7 @@ class Parser(object):
         classBody = self.parseClassBody()
         self.context.strict = previousStrict
 
-        return self.finalize(node, Node.ClassExpression(id, superClass, classBody))
+        return self.finalize(node, Node.ClassExpression(id, superClass, classBody, decorators=decorators))
 
     # https://tc39.github.io/ecma262/#sec-scripts
     # https://tc39.github.io/ecma262/#sec-modules

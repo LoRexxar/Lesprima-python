@@ -637,22 +637,24 @@ class ClassMethod(Function):
 
 class ClassProperty(Node):
     # Originally not in esprima
-    def __init__(self, key, computed, value, isStatic):
-        # type: (Expression, bool, Expression, bool) -> None
+    def __init__(self, key, computed, value, isStatic, decorators=None):
+        # type: (Expression, bool, Expression, bool, Optional[List[Decorator]]) -> None
         self.type = Syntax.ClassProperty
         self.key = key
         self.computed = computed
         self.value = value
         self.static = isStatic
+        self.decorators = [] if decorators is None else decorators
 
 
 class ClassPrivateProperty(Node):
-    def __init__(self, key, value, isStatic):
-        # type: (Identifier, Expression, bool) -> None
+    def __init__(self, key, value, isStatic, decorators=None):
+        # type: (Identifier, Expression, bool, Optional[List[Decorator]]) -> None
         self.type = Syntax.ClassPrivateProperty
         self.key = key
         self.value = value
         self.static = isStatic
+        self.decorators = [] if decorators is None else decorators
 
 
 class Module(Node):

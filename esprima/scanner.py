@@ -660,7 +660,7 @@ class Scanner(object):
 
                         # 1-character punctuators.
                         str = self.source[self.index]
-                        if str in '<>=!+-*%&|^/':
+                        if str in '<>=!+-*%&|^/@':
                             self.index += 1
 
         if self.index == start:
