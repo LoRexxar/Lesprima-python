@@ -8,6 +8,7 @@
 *.egg-info/
 build/
 dist/
-docs/_build/
+docs/
+!docs/.gitkeep
 *_flymake*
 .DS_Store
