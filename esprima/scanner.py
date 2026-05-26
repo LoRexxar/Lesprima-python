@@ -980,6 +980,8 @@ class Scanner(object):
         cooked = ''
         terminated = False
         start = self.index
+        startLineNumber = self.lineNumber
+        startLineStart = self.lineStart
         notEscapeSequenceHead = None
 
         head = self.source[start] == '`'
@@ -1092,8 +1094,8 @@ class Scanner(object):
             cooked=cooked if notEscapeSequenceHead is None else None,
             head=head,
             tail=tail,
-            lineNumber=self.lineNumber,
-            lineStart=self.lineStart,
+            lineNumber=startLineNumber,
+            lineStart=startLineStart,
             start=start,
             end=self.index,
             notEscapeSequenceHead=notEscapeSequenceHead

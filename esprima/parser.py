@@ -64,7 +64,7 @@ class Config(Object):
 
 
 class Context(object):
-    def __init__(self, isModule=False, allow_await=False, allowIn=True, allowStrictDirective=True, allowYield=True, firstCoverInitializedNameError=None, isAssignmentTarget=False, isBindingElement=False, inFunctionBody=False, inIteration=False, inSwitch=False, labelSet=None, strict=False):
+    def __init__(self, isModule=False, allow_await=False, allowIn=True, allowStrictDirective=True, allowYield=True, firstCoverInitializedNameError=None, isAssignmentTarget=False, isBindingElement=False, inFunctionBody=False, inFunction=False, inIteration=False, inSwitch=False, labelSet=None, strict=False):
         self.isModule = isModule
         self.allow_await = allow_await
         self.allowIn = allowIn
@@ -74,6 +74,7 @@ class Context(object):
         self.isAssignmentTarget = isAssignmentTarget
         self.isBindingElement = isBindingElement
         self.inFunctionBody = inFunctionBody
+        self.inFunction = inFunction
         self.inIteration = inIteration
         self.inSwitch = inSwitch
         self.labelSet = {} if labelSet is None else labelSet
@@ -1046,7 +1047,7 @@ class Parser(object):
 
         if self.match('.'):
             self.nextToken()
-            if self.lookahead.type is Token.Identifier and self.context.inFunctionBody and self.lookahead.value == 'target':
+            if self.lookahead.type is Token.Identifier and self.context.inFunction and self.lookahead.value == 'target':
                 property = self.parseIdentifierName()
                 expr = Node.MetaProperty(id, property)
             else:
@@ -1136,7 +1137,7 @@ class Parser(object):
         previousAllowIn = self.context.allowIn
         self.context.allowIn = True
 
-        if self.matchKeyword('super') and self.context.inFunctionBody:
+        if self.matchKeyword('super') and self.context.inFunction:
             expr = self.createNode()
             self.nextToken()
             expr = self.finalize(expr, Node.Super())
@@ -1223,7 +1224,7 @@ class Parser(object):
         assert self.context.allowIn, 'callee of new expression always allow in keyword.'
 
         node = self.startNode(self.lookahead)
-        if self.matchKeyword('super') and self.context.inFunctionBody:
+        if self.matchKeyword('super') and self.context.inFunction:
             expr = self.parseSuper()
         else:
             expr = self.inheritCoverGrammar(self.parseNewExpression if self.matchKeyword('new') else self.parsePrimaryExpression)
@@ -2541,6 +2542,7 @@ class Parser(object):
         self.context.inIteration = False
         self.context.inSwitch = False
         self.context.inFunctionBody = True
+        self.context.inFunction = True
 
         while self.lookahead.type is not Token.EOF:
             if self.match('}'):
@@ -2605,6 +2607,9 @@ class Parser(object):
             firstRestricted=firstRestricted
         )
 
+        previousInFunction = self.context.inFunction
+        self.context.inFunction = True
+
         self.expect('(')
         if not self.match(')'):
             options.paramSet = {}
@@ -2616,6 +2621,8 @@ class Parser(object):
                 if self.match(')'):
                     break
         self.expect(')')
+
+        self.context.inFunction = previousInFunction
 
         if not self.context.allowYield:
             for param in options.params:
