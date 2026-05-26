@@ -3162,7 +3162,8 @@ class Parser(object):
             value_node = self.createNode()
             value = self.finalize(value_node, Node.StringLiteral(self.lookahead.value, self.getTokenRaw(self.lookahead)))
             self.nextToken()
-            attributes.append({'key': key, 'value': value})
+            attr_node = self.createNode()
+            attributes.append(self.finalize(attr_node, Node.ImportAttribute(key, value)))
             if not self.match('}'):
                 self.expect(',')
         self.expect('}')

@@ -112,3 +112,4 @@ class Syntax:
     ClassPrivate = "ClassPrivate"
     ClassPrivateProperty = "ClassPrivateProperty"
     Decorator = "Decorator"
+    ImportAttribute = "ImportAttribute"

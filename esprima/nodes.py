@@ -508,6 +508,15 @@ class Import(Node):
         self.type = Syntax.Import
 
 
+class ImportAttribute(Node):
+    def __init__(self, key, value):
+        # type: (Any, Any) -> None
+        """An import attribute key-value pair."""
+        self.type = Syntax.ImportAttribute
+        self.key = key
+        self.value = value
+
+
 class ImportDeclaration(ModuleDeclaration):
     def __init__(self, specifiers, source, attributes=None):
         # type: (List[Union[ImportSpecifier, ImportDefaultSpecifier, ImportNamespaceSpecifier]], Literal, Optional[List]) -> None
