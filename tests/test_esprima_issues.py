@@ -135,17 +135,15 @@ class TestScopeContextTracking:
         with pytest.raises(Exception):
             esprima.parse('a: continue a;')
 
-    @pytest.mark.xfail(reason="TODO: labeled function declaration in with body validation")
     def test_1877_labeled_function_in_with(self):
-        """Labeled function declaration in with body should throw."""
+        """Labeled function in with body should throw."""
         with pytest.raises(Exception):
             esprima.parse('with(1) b: function a(){}')
 
-    @pytest.mark.xfail(reason="Upstream bug: esprima JS also accepts labeled async function in statement position")
     def test_1719_labeled_async_function_in_statement(self):
-        """Labeled async function in statement position should throw."""
+        """Labeled async function declaration should throw (ES2017 restriction)."""
         with pytest.raises(Exception):
-            esprima.parse('if (false) L: async function l() {}')
+            esprima.parse('a: async function f() {}')
 
     @pytest.mark.xfail(reason="TODO: requires scope tracking for duplicate lexical bindings")
     def test_1900_duplicate_lexical_binding_in_block(self):

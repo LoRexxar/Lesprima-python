@@ -2308,7 +2308,10 @@ class Parser(object):
             body = self.finalize(self.createNode(), Node.EmptyStatement())
         else:
             self.expect(')')
+            previousInSingleStatementBody = self.context.inSingleStatementBody
+            self.context.inSingleStatementBody = True
             body = self.parseStatement()
+            self.context.inSingleStatementBody = previousInSingleStatementBody
 
         return self.finalize(node, Node.WithStatement(object, body))
 
@@ -2382,8 +2385,14 @@ class Parser(object):
             if self.matchKeyword('class'):
                 self.tolerateUnexpectedToken(self.lookahead)
                 body = self.parseClassDeclaration()
+            elif self.matchAsyncFunction():
+                # Labeled body cannot be an async function declaration (ES2017+ restriction)
+                self.throwError(Messages.AsyncFunctionInLegacyContext)
             elif self.matchKeyword('function'):
                 token = self.lookahead
+                # Labeled sloppy function in single-statement context is also disallowed
+                if self.context.inSingleStatementBody and not self.context.strict:
+                    self.throwError(Messages.StrictFunction)
                 declaration = self.parseFunctionDeclaration()
                 if self.context.strict:
                     self.tolerateUnexpectedToken(token, Messages.StrictFunction)
@@ -2522,6 +2531,11 @@ class Parser(object):
             elif value == 'for':
                 statement = self.parseForStatement()
             elif value == 'function':
+                # Sloppy-mode function declarations are only allowed at top level,
+                # inside a block, or as the direct body of an if statement (Annex B.3.3).
+                # Single-statement contexts (for/while/do-while/with) don't qualify.
+                if self.context.inSingleStatementBody and not self.context.strict:
+                    self.throwError(Messages.StrictFunction)
                 statement = self.parseFunctionDeclaration()
             elif value == 'if':
                 statement = self.parseIfStatement()
