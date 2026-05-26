@@ -64,7 +64,7 @@ class Config(Object):
 
 
 class Context(object):
-    def __init__(self, isModule=False, allow_await=False, allowIn=True, allowStrictDirective=True, allowYield=True, firstCoverInitializedNameError=None, isAssignmentTarget=False, isBindingElement=False, inFunctionBody=False, inFunction=False, inIteration=False, inSwitch=False, labelSet=None, strict=False):
+    def __init__(self, isModule=False, allow_await=False, allowIn=True, allowStrictDirective=True, allowYield=True, firstCoverInitializedNameError=None, isAssignmentTarget=False, isBindingElement=False, inFunctionBody=False, inFunction=False, inIteration=False, inSwitch=False, inSingleStatementBody=False, labelSet=None, strict=False):
         self.isModule = isModule
         self.allow_await = allow_await
         self.allowIn = allowIn
@@ -77,6 +77,7 @@ class Context(object):
         self.inFunction = inFunction
         self.inIteration = inIteration
         self.inSwitch = inSwitch
+        self.inSingleStatementBody = inSingleStatementBody
         self.labelSet = {} if labelSet is None else labelSet
         self.strict = strict
 
@@ -1065,7 +1066,9 @@ class Parser(object):
 
     def parseAsyncArgument(self):
         arg = self.parseAssignmentExpression()
-        self.context.firstCoverInitializedNameError = None
+        # Don't clear firstCoverInitializedNameError here — the caller (parseAsyncArguments)
+        # uses isolateCoverGrammar which checks it. The error will be cleared only when
+        # we confirm this is an async arrow function (has =>).
         return arg
 
     def parseAsyncArguments(self):
@@ -1076,7 +1079,10 @@ class Parser(object):
                 if self.match('...'):
                     expr = self.parseSpreadElement()
                 else:
-                    expr = self.isolateCoverGrammar(self.parseAsyncArgument)
+                    # Use inheritCoverGrammar instead of isolateCoverGrammar so that
+                    # firstCoverInitializedNameError is preserved (not immediately thrown).
+                    # The caller will check it after determining if this is an async arrow.
+                    expr = self.inheritCoverGrammar(self.parseAsyncArgument)
                 args.append(expr)
                 if self.match(')'):
                     break
@@ -1170,9 +1176,15 @@ class Parser(object):
                             self.tolerateError(Messages.BadImportCallArity)
                 expr = self.finalize(self.startNode(startToken), Node.CallExpression(expr, args, optional))
                 if asyncArrow and self.match('=>'):
+                    # This is an async arrow function — cover formals are valid, clear the error
+                    self.context.firstCoverInitializedNameError = None
                     for arg in args:
                         self.reinterpretExpressionAsPattern(arg)
                     expr = Node.AsyncArrowParameterPlaceHolder(args)
+                elif asyncArrow and self.context.firstCoverInitializedNameError is not None:
+                    # async(...) without => but with CoverInitializedName (e.g. async({x=y}))
+                    # is NOT a valid call expression
+                    self.throwUnexpectedToken(self.context.firstCoverInitializedNameError)
             elif self.match('['):
                 self.context.isBindingElement = False
                 self.context.isAssignmentTarget = not optional
@@ -2024,9 +2036,12 @@ class Parser(object):
         self.expectKeyword('do')
 
         previousInIteration = self.context.inIteration
+        previousInSingleStatementBody = self.context.inSingleStatementBody
         self.context.inIteration = True
+        self.context.inSingleStatementBody = True
         body = self.parseStatement()
         self.context.inIteration = previousInIteration
+        self.context.inSingleStatementBody = previousInSingleStatementBody
 
         self.expectKeyword('while')
         self.expect('(')
@@ -2057,9 +2072,12 @@ class Parser(object):
             self.expect(')')
 
             previousInIteration = self.context.inIteration
+            previousInSingleStatementBody = self.context.inSingleStatementBody
             self.context.inIteration = True
+            self.context.inSingleStatementBody = True
             body = self.parseStatement()
             self.context.inIteration = previousInIteration
+            self.context.inSingleStatementBody = previousInSingleStatementBody
 
         return self.finalize(node, Node.WhileStatement(test, body))
 
@@ -2196,9 +2214,12 @@ class Parser(object):
             self.expect(')')
 
             previousInIteration = self.context.inIteration
+            previousInSingleStatementBody = self.context.inSingleStatementBody
             self.context.inIteration = True
+            self.context.inSingleStatementBody = True
             body = self.isolateCoverGrammar(self.parseStatement)
             self.context.inIteration = previousInIteration
+            self.context.inSingleStatementBody = previousInSingleStatementBody
 
         if left is None:
             return self.finalize(node, Node.ForStatement(init, test, update, body))
@@ -2481,11 +2502,15 @@ class Parser(object):
             elif self.matchContextualKeyword('await') and self.isAwaitUsing():
                 # ES2025: await using x = expr; (await is Identifier in modules)
                 statement = self.parseUsingDeclaration(isAsync=True)
+            elif self.context.inSingleStatementBody and self.lookahead.value == 'let' and self.isLexicalDeclaration():
+                self.throwError(Messages.LexicalDeclarationInSingleStatement)
             else:
                 statement = self.parseFunctionDeclaration() if self.matchAsyncFunction() else self.parseLabelledStatement()
 
         elif typ is Token.Keyword:
             value = self.lookahead.value
+            if self.context.inSingleStatementBody and value in ('const', 'class'):
+                self.throwError(Messages.LexicalDeclarationInSingleStatement)
             if value == 'break':
                 statement = self.parseBreakStatement()
             elif value == 'continue':
@@ -2517,6 +2542,11 @@ class Parser(object):
                 statement = self.parseWhileStatement()
             elif value == 'with':
                 statement = self.parseWithStatement()
+            elif value == 'let':
+                # let is a Keyword but can be either lexical declaration or expression
+                if self.context.inSingleStatementBody and self.isLexicalDeclaration():
+                    self.throwError(Messages.LexicalDeclarationInSingleStatement)
+                statement = self.parseExpressionStatement()
             else:
                 statement = self.parseExpressionStatement()
 

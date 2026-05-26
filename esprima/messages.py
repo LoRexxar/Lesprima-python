@@ -91,3 +91,4 @@ class Messages:
     CannotUseImportMetaOutsideAModule = "The keyword 'import.meta' is only allowed in module code"
     NullishCoalescingNotAllowed = "Nullish coalescing operator(??) requires parens when mixed with logical operators"
     InvalidTaggedTemplateOnOptionalChain = "Invalid tagged template on optional chain"
+    LexicalDeclarationInSingleStatement = "Lexical declaration cannot appear in a single-statement context"

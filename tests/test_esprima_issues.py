@@ -116,9 +116,8 @@ class TestLHSAssignmentValidation:
         with pytest.raises(Exception):
             esprima.parse('[v] += ary')
 
-    @pytest.mark.xfail(reason="TODO: cover grammar shorthand+default validation in async calls")
     def test_1606_shorthand_with_default_in_async(self):
-        """Shorthand property with default in async call should throw."""
+        """Shorthand property with default in async call should throw (not async arrow)."""
         with pytest.raises(Exception):
             esprima.parse('async({x=y})')
 
@@ -154,7 +153,6 @@ class TestScopeContextTracking:
         with pytest.raises(Exception):
             esprima.parse('{ class f {} var f; }')
 
-    @pytest.mark.xfail(reason="TODO: requires single-statement context tracking for lexical declarations")
     def test_1898_let_in_single_statement_for_of(self):
         """let as body of single-statement for-of should throw."""
         with pytest.raises(Exception):
@@ -211,17 +209,15 @@ class TestImportExportValidation:
 class TestStrictModeAndOther:
     """B7: Strict mode validation, template literals, etc."""
 
-    @pytest.mark.xfail(reason="TODO: scanner-level fix needed for non-octal decimal in strict mode")
     def test_1731_non_octal_decimal_strict(self):
         """Non-octal decimal integer in strict mode should throw."""
         with pytest.raises(Exception):
             esprima.parse('"use strict"; 08')
 
-    @pytest.mark.xfail(reason="TODO: scanner-level fix needed for invalid unicode escapes")
     def test_1697_invalid_unicode_escape(self):
-        """Invalid unicode escape for identifier should throw."""
+        """Invalid unicode escape as identifier should throw."""
         with pytest.raises(Exception):
-            esprima.parse('\\u{1}')
+            esprima.parse(r'\u{1}')
 
     def test_1814_throw_template_with_newline(self):
         """throw with template literal containing newline should parse."""

@@ -461,6 +461,8 @@ class Scanner(object):
             if self.source[self.index] == '{':
                 self.index += 1
                 ch = self.scanUnicodeCodePointEscape()
+                if not ch or not Character.isIdentifierStart(ch[0]):
+                    self.throwUnexpectedToken()
             else:
                 ch = self.scanHexEscape('u')
                 if not ch or ch == '\\' or not Character.isIdentifierStart(ch[0]):
@@ -487,6 +489,8 @@ class Scanner(object):
                 if self.source[self.index] == '{':
                     self.index += 1
                     ch = self.scanUnicodeCodePointEscape()
+                    if not ch or not Character.isIdentifierPart(ch[0]):
+                        self.throwUnexpectedToken()
                 else:
                     ch = self.scanHexEscape('u')
                     if not ch or ch == '\\' or not Character.isIdentifierPart(ch[0]):
@@ -871,10 +875,17 @@ class Scanner(object):
         if Character.isIdentifierStart(self.source[self.index]):
             self.throwUnexpectedToken()
 
+        # Legacy non-octal decimal: 08, 09 are SyntaxError in strict mode (Annex B.1.1)
+        # Check if raw starts with '0' followed by '8' or '9' (no radix prefix, no decimal point before them)
+        raw = self.source[start:self.index]
+        legacy_octal_like = (len(raw) >= 2 and raw[0] == '0' and raw[1] in '89'
+                             and '.' not in raw[:raw.find('e') if 'e' in raw.lower() else len(raw)])
+
         value = float(num)
         return RawToken(
             type=Token.NumericLiteral,
             value=int(value) if value.is_integer() else value,
+            octal=legacy_octal_like or None,
             lineNumber=self.lineNumber,
             lineStart=self.lineStart,
             start=start,
