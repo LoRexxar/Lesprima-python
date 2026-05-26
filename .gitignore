@@ -8,7 +8,7 @@
 *.egg-info/
 build/
 dist/
-docs/
-!docs/.gitkeep
 *_flymake*
 .DS_Store
+.pytest_cache/
+CLAUDE.md
