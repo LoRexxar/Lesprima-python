@@ -3,7 +3,9 @@
 [![PyPI version](https://img.shields.io/pypi/v/esprima.svg)](https://pypi.python.org/pypi/esprima)
 [![Python 3.11+](https://img.shields.io/pypi/pyversions/esprima.svg)](https://pypi.python.org/pypi/esprima)
 
-ECMAScript (JavaScript) parser 的 Python 移植，fork 自 [Kronuz/esprima-python](https://github.com/Kronuz/esprima-python)，上游源自 [jquery/esprima](http://esprima.org)。
+
+> Enhanced fork of [Kronuz/esprima-python](https://github.com/Kronuz/esprima-python) — fixes core AST bugs, Supports ES2018–ES2025 syntax.
+
 
 ## 特性
 
