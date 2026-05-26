@@ -1,5 +1,41 @@
 [build-system]
-requires = ["setuptools>=44", "wheel", "setuptools_scm[toml]>=3.4.3"]
+requires = ["setuptools>=64.0,<77.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
-[tool.setuptools_scm]
+[project]
+name = "lesprima"
+version = "2.0.0"
+description = "ECMAScript parsing infrastructure for multipurpose analysis in Python"
+readme = "README.md"
+license = {text = "BSD-3-Clause"}
+requires-python = ">=3.11"
+authors = [
+    { name = "German M. Bravo (Kronuz)" },
+    { name = "LoRexxar", email = "LoRexxar@gmail.com" },
+]
+keywords = ["esprima", "ecmascript", "javascript", "parser", "ast", "lesprima"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: BSD License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Code Generators",
+    "Topic :: Software Development :: Compilers",
+    "Topic :: Text Processing :: General",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
+
+[project.urls]
+Homepage = "https://github.com/LoRexxar/Lesprima-python"
+Repository = "https://github.com/LoRexxar/Lesprima-python"
+
+[project.scripts]
+lesprima = "esprima.__main__:main"
+
+[tool.setuptools.packages.find]
+include = ["esprima*"]

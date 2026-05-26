@@ -5,33 +5,49 @@
                 "body": [
                     {
                         "kind": "init",
+                        "shorthand": true,
                         "computed": false,
                         "value": {
-                            "raw": "1",
-                            "type": "Literal",
-                            "value": 1
+                            "right": {
+                                "raw": "1",
+                                "type": "Literal",
+                                "value": 1
+                            },
+                            "type": "AssignmentPattern",
+                            "left": {
+                                "type": "Identifier",
+                                "name": "a"
+                            }
                         },
                         "key": {
                             "type": "Identifier",
                             "name": "a"
                         },
-                        "type": "FieldDefinition",
-                        "static": false
+                        "type": "Property",
+                        "method": false
                     },
                     {
                         "kind": "init",
+                        "shorthand": true,
                         "computed": false,
                         "value": {
-                            "raw": "2",
-                            "type": "Literal",
-                            "value": 2
+                            "right": {
+                                "raw": "2",
+                                "type": "Literal",
+                                "value": 2
+                            },
+                            "type": "AssignmentPattern",
+                            "left": {
+                                "type": "Identifier",
+                                "name": "b"
+                            }
                         },
                         "key": {
                             "type": "Identifier",
                             "name": "b"
                         },
-                        "type": "FieldDefinition",
-                        "static": true
+                        "type": "Property",
+                        "method": false
                     }
                 ],
                 "type": "ClassBody"

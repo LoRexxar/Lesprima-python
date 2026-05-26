@@ -232,7 +232,7 @@ class JSXParser(Parser):
                 end=self.scanner.index
             )
 
-        # Identifier can not contain backslash (char code 92).
+        # Identifer can not contain backslash (char code 92).
         if Character.isIdentifierStart(ch) and ch != '\\':
             start = self.scanner.index
             self.scanner.index += 1
@@ -441,6 +441,12 @@ class JSXParser(Parser):
         node = self.createJSXNode()
 
         self.expectJSX('<')
+        # Fragment: <>...</>
+        if self.matchJSX('>'):
+            selfClosing = False
+            self.expectJSX('>')
+            return self.finalize(node, JSXNode.JSXOpeningFragment(selfClosing))
+
         name = self.parseJSXElementName()
         attributes = self.parseJSXAttributes()
         selfClosing = self.matchJSX('/')
@@ -457,9 +463,19 @@ class JSXParser(Parser):
         self.expectJSX('<')
         if self.matchJSX('/'):
             self.expectJSX('/')
-            elementName = self.parseJSXElementName()
+            # Fragment closing: </>
+            if self.matchJSX('>'):
+                self.expectJSX('>')
+                return self.finalize(node, JSXNode.JSXClosingFragment())
+            name = self.parseJSXElementName()
             self.expectJSX('>')
-            return self.finalize(node, JSXNode.JSXClosingElement(elementName))
+            return self.finalize(node, JSXNode.JSXClosingElement(name))
+
+        # Fragment opening: <>
+        if self.matchJSX('>'):
+            selfClosing = False
+            self.expectJSX('>')
+            return self.finalize(node, JSXNode.JSXOpeningFragment(selfClosing))
 
         name = self.parseJSXElementName()
         attributes = self.parseJSXAttributes()
@@ -547,6 +563,29 @@ class JSXParser(Parser):
                     stack.pop()
                 else:
                     break
+
+            if element.type is JSXSyntax.JSXClosingFragment:
+                el.closing = element
+                if el.opening.type != JSXSyntax.JSXOpeningFragment:
+                    self.tolerateError('Expected corresponding JSX closing fragment for opening fragment')
+
+                if stack:
+                    child = self.finalize(el.node, JSXNode.JSXElement(el.opening, el.children, el.closing))
+                    el = stack[-1]
+                    el.children.append(child)
+                    stack.pop()
+                else:
+                    break
+
+            if element.type is JSXSyntax.JSXOpeningFragment:
+                opening = element
+                stack.append(el)
+                el = MetaJSXElement(
+                    node=node,
+                    opening=opening,
+                    closing=None,
+                    children=[],
+                )
 
         return el
 

@@ -23,24 +23,84 @@
 
 from __future__ import absolute_import, unicode_literals
 
+import re
+import json
 
-def toDict(value):
-    from .visitor import ToDictVisitor
-    return ToDictVisitor().visit(value)
+from .compat import unicode
 
 
-class Array(list):
-    pass
+re_type = type(re.compile(r''))
+
+
+def toDict(obj):
+    if isinstance(obj, dict):
+        return dict((unicode(k), toDict(v)) for k, v in obj.items() if v is not None)
+    if isinstance(obj, list):
+        return [toDict(v) for v in obj]
+    if isinstance(obj, Object):
+        return obj.toDict()
+    if isinstance(obj, re_type):
+        return {}
+    return obj
 
 
 class Object(object):
     def toDict(self):
-        from .visitor import ToDictVisitor
-        return ToDictVisitor().visit(self)
+        return toDict(self.__dict__)
+
+    def repr(self, obj, level=0, indent=4, nl="\n", sp="", skip=(), reprs=()):
+        if isinstance(indent, int):
+            indent = " " * indent
+        indent1 = indent * level
+        indent2 = indent1 + indent
+        if isinstance(obj, Object):
+            obj = obj.__dict__
+        if isinstance(obj, unicode):
+            return json.dumps(obj)
+        if isinstance(obj, list):
+            if not obj:
+                return "[]"
+            return "[%s%s%s%s%s%s%s]" % (
+                sp,
+                nl,
+                indent2,
+                (",%s%s%s" % (nl, sp, indent2)).join(
+                    reprs.get(type(v).__name__, self.repr)(v, level=level + 1, indent=indent, nl=nl, sp=sp, skip=skip, reprs=reprs)
+                    for v in obj
+                ),
+                nl,
+                indent1,
+                sp,
+            )
+        if isinstance(obj, dict):
+            if not obj:
+                return "{}"
+            return "{%s%s%s%s%s%s%s}" % (
+                sp,
+                nl,
+                indent2,
+                (",%s%s%s" % (nl, sp, indent2)).join(
+                    reprs.get(type(v).__name__, self.repr)((k, v), level=level + 1, indent=indent, nl=nl, sp=sp, skip=skip, reprs=reprs)
+                    for k, v in obj.items()
+                    if v is not None and not k.startswith('_') and k not in skip
+                ),
+                nl,
+                indent1,
+                sp,
+            )
+        if isinstance(obj, tuple):
+            k, v = obj
+            return (
+                "%s: %s" % (
+                    k, self.repr(v, level=level, indent=indent, nl=nl, sp=sp, skip=skip, reprs=reprs),
+                )
+            )
+        return repr(obj)
 
     def __repr__(self):
-        from .visitor import ReprVisitor
-        return ReprVisitor().visit(self)
+        return self.repr(self, reprs={
+            'SourceLocation': lambda o, **k: self.repr(o, **dict(k, indent="", nl="", sp=" ")),
+        })
 
     def __getattr__(self, name):
         return None

@@ -26,39 +26,32 @@ from __future__ import absolute_import, unicode_literals
 from .comment_handler import CommentHandler
 from .error_handler import Error
 from .jsx_parser import JSXParser
-from .jsx_syntax import JSXSyntax
-from .objects import Array, toDict
+from .objects import toDict
 from .parser import Parser
 from .syntax import Syntax
 from .tokenizer import Tokenizer
 from .visitor import NodeVisitor
 from . import nodes
-from . import jsx_nodes
 
 
-__all__ = ['Syntax', 'JSXSyntax', 'Error', 'NodeVisitor', 'nodes', 'jsx_nodes',
-           'parse', 'parseModule', 'parseScript', 'tokenize', 'toDict']
+__all__ = ['toDict', 'Syntax', 'Error', 'NodeVisitor', 'nodes',
+           'parse', 'parseModule', 'parseScript', 'tokenize']
 
 
 def parse(code, options=None, delegate=None, **kwargs):
     options = {} if options is None else options.copy()
     options.update(kwargs)
 
-    # ESNext presset:
-    if options.get('esnext', False):
-        options['jsx'] = True
-        options['classProperties'] = True
+    # Enable ES2022+ class features by default
+    options.setdefault('classProperties', True)
 
     commentHandler = None
 
     def proxyDelegate(node, metadata):
         if delegate:
-            new_node = delegate(node, metadata)
-            if new_node is not None:
-                node = new_node
+            delegate(node, metadata)
         if commentHandler:
             commentHandler.visit(node, metadata)
-        return node
 
     parserDelegate = None if delegate is None else proxyDelegate
     collectComment = options.get('comment', False)
@@ -106,7 +99,10 @@ def tokenize(code, options=None, delegate=None, **kwargs):
 
     tokenizer = Tokenizer(code, options)
 
-    tokens = Array()
+    class Tokens(list):
+        pass
+
+    tokens = Tokens()
 
     try:
         while True:

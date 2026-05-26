@@ -64,9 +64,9 @@ class Config(Object):
 
 
 class Context(object):
-    def __init__(self, isModule=False, allowAwait=False, allowIn=True, allowStrictDirective=True, allowYield=True, firstCoverInitializedNameError=None, isAssignmentTarget=False, isBindingElement=False, inFunctionBody=False, inIteration=False, inSwitch=False, labelSet=None, strict=False):
+    def __init__(self, isModule=False, allow_await=False, allowIn=True, allowStrictDirective=True, allowYield=True, firstCoverInitializedNameError=None, isAssignmentTarget=False, isBindingElement=False, inFunctionBody=False, inFunction=False, inIteration=False, inSwitch=False, inSingleStatementBody=False, labelSet=None, strict=False):
         self.isModule = isModule
-        self.allowAwait = allowAwait
+        self.allow_await = allow_await
         self.allowIn = allowIn
         self.allowStrictDirective = allowStrictDirective
         self.allowYield = allowYield
@@ -74,8 +74,10 @@ class Context(object):
         self.isAssignmentTarget = isAssignmentTarget
         self.isBindingElement = isBindingElement
         self.inFunctionBody = inFunctionBody
+        self.inFunction = inFunction
         self.inIteration = inIteration
         self.inSwitch = inSwitch
+        self.inSingleStatementBody = inSingleStatementBody
         self.labelSet = {} if labelSet is None else labelSet
         self.strict = strict
 
@@ -108,6 +110,7 @@ class Parser(object):
         self.scanner.trackComment = self.config.comment
 
         self.operatorPrecedence = {
+            '??': 1,
             '||': 1,
             '&&': 2,
             '|': 3,
@@ -145,7 +148,7 @@ class Parser(object):
 
         self.context = Context(
             isModule=False,
-            allowAwait=False,
+            allow_await=False,
             allowIn=True,
             allowStrictDirective=True,
             allowYield=True,
@@ -353,17 +356,11 @@ class Parser(object):
             column=self.startMarker.column,
         )
 
-    def startNode(self, token, lastLineStart=0):
-        column = token.start - token.lineStart
-        line = token.lineNumber
-        if column < 0:
-            column += lastLineStart
-            line -= 1
-
+    def startNode(self, token):
         return Marker(
             index=token.start,
-            line=line,
-            column=column,
+            line=token.lineNumber,
+            column=token.start - token.lineStart,
         )
 
     def finalize(self, marker, node):
@@ -457,11 +454,11 @@ class Parser(object):
             return False
 
         op = self.lookahead.value
-        return op in ('=', '*=', '**=', '/=', '%=', '+=', '-=', '<<=', '>>=', '>>>=', '&=', '^=', '|=')
+        return op in ('=', '*=', '**=', '/=', '%=', '+=', '-=', '<<=', '>>=', '>>>=', '&=', '^=', '|=', '&&=', '||=', '??=')
 
     # Cover grammar support.
     #
-    # When an assignment expression position starts with a left parenthesis, the determination of the type
+    # When an assignment expression position starts with an left parenthesis, the determination of the type
     # of the syntax is to be deferred arbitrarily long until the end of the parentheses pair (plus a lookahead)
     # or the first comma. This situation also defers the determination of all the expressions nested in the pair.
     #
@@ -544,35 +541,39 @@ class Parser(object):
 
         typ = self.lookahead.type
         if typ is Token.Identifier:
-            if (self.context.isModule or self.context.allowAwait) and self.lookahead.value == 'await':
+            if (self.context.isModule or self.context.allow_await) and self.lookahead.value == 'await':
                 self.tolerateUnexpectedToken(self.lookahead)
             expr = self.parseFunctionExpression() if self.matchAsyncFunction() else self.finalize(node, Node.Identifier(self.nextToken().value))
 
-        elif typ in (
-            Token.NumericLiteral,
-            Token.StringLiteral,
-        ):
+        elif typ is Token.NumericLiteral:
             if self.context.strict and self.lookahead.octal:
                 self.tolerateUnexpectedToken(self.lookahead, Messages.StrictOctalLiteral)
             self.context.isAssignmentTarget = False
             self.context.isBindingElement = False
             token = self.nextToken()
             raw = self.getTokenRaw(token)
-            expr = self.finalize(node, Node.Literal(token.value, raw))
+            expr = self.finalize(node, Node.StringLiteral(token.value, raw))
+
+        elif typ is Token.StringLiteral:
+            self.context.isAssignmentTarget = False
+            self.context.isBindingElement = False
+            token = self.nextToken()
+            raw = self.getTokenRaw(token)
+            expr = self.finalize(node, Node.StringLiteral(token.value, raw))
 
         elif typ is Token.BooleanLiteral:
             self.context.isAssignmentTarget = False
             self.context.isBindingElement = False
             token = self.nextToken()
             raw = self.getTokenRaw(token)
-            expr = self.finalize(node, Node.Literal(token.value == 'true', raw))
+            expr = self.finalize(node, Node.BooleanLiteral(token.value == 'true', raw))
 
         elif typ is Token.NullLiteral:
             self.context.isAssignmentTarget = False
             self.context.isBindingElement = False
             token = self.nextToken()
             raw = self.getTokenRaw(token)
-            expr = self.finalize(node, Node.Literal(None, raw))
+            expr = self.finalize(node, Node.NullLiteral(raw))
 
         elif typ is Token.Template:
             expr = self.parseTemplateLiteral()
@@ -592,9 +593,18 @@ class Parser(object):
                 self.scanner.index = self.startMarker.index
                 token = self.nextRegexToken()
                 raw = self.getTokenRaw(token)
-                expr = self.finalize(node, Node.RegexLiteral(token.regex, raw, token.pattern, token.flags))
+                expr = self.finalize(node, Node.RegExpLiteral(token.pattern, token.flags, raw))
+            elif value == '@':
+                # Decorator followed by class expression
+                expr = self.parseClassExpression()
             else:
                 expr = self.throwUnexpectedToken(self.nextToken())
+
+        elif typ is Token.PrivateIdentifier:
+            self.context.isAssignmentTarget = False
+            self.context.isBindingElement = False
+            token = self.nextToken()
+            expr = self.finalize(node, Node.PrivateIdentifier(token.value))
 
         elif typ is Token.Keyword:
             if not self.context.strict and self.context.allowYield and self.matchKeyword('yield'):
@@ -613,6 +623,10 @@ class Parser(object):
                     expr = self.parseClassExpression()
                 elif self.matchImportCall():
                     expr = self.parseImportCall()
+                elif self.matchImportMeta():
+                    if not self.context.isModule:
+                        self.tolerateUnexpectedToken(self.lookahead, Messages.CannotUseImportMetaOutsideAModule)
+                    expr = self.parseImportMeta()
                 else:
                     expr = self.throwUnexpectedToken(self.nextToken())
 
@@ -677,6 +691,7 @@ class Parser(object):
         node = self.createNode()
 
         previousAllowYield = self.context.allowYield
+        # In non-generator methods, yield is a valid identifier (sloppy mode)
         self.context.allowYield = True
         params = self.parseFormalParameters()
         method = self.parsePropertyMethod(params)
@@ -688,13 +703,13 @@ class Parser(object):
         node = self.createNode()
 
         previousAllowYield = self.context.allowYield
-        previousAwait = self.context.allowAwait
+        previousAwait = self.context.allow_await
         self.context.allowYield = False
-        self.context.allowAwait = True
+        self.context.allow_await = True
         params = self.parseFormalParameters()
         method = self.parsePropertyMethod(params)
         self.context.allowYield = previousAllowYield
-        self.context.allowAwait = previousAwait
+        self.context.allow_await = previousAwait
 
         return self.finalize(node, Node.AsyncFunctionExpression(None, params.params, method))
 
@@ -703,14 +718,15 @@ class Parser(object):
         token = self.nextToken()
 
         typ = token.type
-        if typ in (
-            Token.StringLiteral,
-            Token.NumericLiteral,
-        ):
+        if typ is Token.NumericLiteral:
             if self.context.strict and token.octal:
                 self.tolerateUnexpectedToken(token, Messages.StrictOctalLiteral)
             raw = self.getTokenRaw(token)
-            key = self.finalize(node, Node.Literal(token.value, raw))
+            key = self.finalize(node, Node.NumericLiteral(token.value, raw))
+
+        elif typ is Token.StringLiteral:
+            raw = self.getTokenRaw(token)
+            key = self.finalize(node, Node.StringLiteral(token.value, raw))
 
         elif typ in (
             Token.Identifier,
@@ -719,6 +735,9 @@ class Parser(object):
             Token.Keyword,
         ):
             key = self.finalize(node, Node.Identifier(token.value))
+
+        elif typ is Token.PrivateIdentifier:
+            key = self.finalize(node, Node.PrivateIdentifier(token.value))
 
         elif typ is Token.Punctuator:
             if token.value == '[':
@@ -735,7 +754,7 @@ class Parser(object):
     def isPropertyKey(self, key, value):
         return (
             (key.type is Syntax.Identifier and key.name == value) or
-            (key.type is Syntax.Literal and key.value == value)
+            (key.type is Syntax.StringLiteral and key.value == value)
         )
 
     def parseObjectProperty(self, hasProto):
@@ -754,7 +773,7 @@ class Parser(object):
             id = token.value
             self.nextToken()
             computed = self.match('[')
-            isAsync = not self.hasLineTerminator and (id == 'async') and not (self.match(':', '(', '*', ','))
+            isAsync = not self.hasLineTerminator and (id == 'async') and not (self.match(':', '(', '*'))
             key = self.parseObjectPropertyKey() if isAsync else self.finalize(node, Node.Identifier(id))
         elif self.match('*'):
             self.nextToken()
@@ -832,38 +851,42 @@ class Parser(object):
 
     # https://tc39.github.io/ecma262/#sec-template-literals
 
-    def parseTemplateHead(self):
+    def parseTemplateHead(self, is_tagged=False):
         assert self.lookahead.head, 'Template literal must start with a template head'
 
         node = self.createNode()
         token = self.nextToken()
+        if not is_tagged and token.notEscapeSequenceHead is not None:
+            self.throwUnexpectedToken(token, Messages.TemplateOctalLiteral)
         raw = token.value
         cooked = token.cooked
 
         return self.finalize(node, Node.TemplateElement(raw, cooked, token.tail))
 
-    def parseTemplateElement(self):
+    def parseTemplateElement(self, is_tagged=False):
         if self.lookahead.type is not Token.Template:
             self.throwUnexpectedToken()
 
         node = self.createNode()
         token = self.nextToken()
+        if not is_tagged and token.notEscapeSequenceHead is not None:
+            self.throwUnexpectedToken(token, Messages.TemplateOctalLiteral)
         raw = token.value
         cooked = token.cooked
 
         return self.finalize(node, Node.TemplateElement(raw, cooked, token.tail))
 
-    def parseTemplateLiteral(self):
+    def parseTemplateLiteral(self, is_tagged=False):
         node = self.createNode()
 
         expressions = []
         quasis = []
 
-        quasi = self.parseTemplateHead()
+        quasi = self.parseTemplateHead(is_tagged)
         quasis.append(quasi)
         while not quasi.tail:
             expressions.append(self.parseExpression())
-            quasi = self.parseTemplateElement()
+            quasi = self.parseTemplateElement(is_tagged)
             quasis.append(quasi)
 
         return self.finalize(node, Node.TemplateLiteral(quasis, expressions))
@@ -878,7 +901,9 @@ class Parser(object):
             Syntax.RestElement,
             Syntax.AssignmentPattern,
         ):
-            pass
+            if typ is Syntax.Identifier and self.context.strict:
+                if self.scanner.isRestrictedWord(expr.name):
+                    self.tolerateError(Messages.StrictLHSAssignment)
         elif typ is Syntax.SpreadElement:
             expr.type = Syntax.RestElement
             self.reinterpretExpressionAsPattern(expr.argument)
@@ -1023,7 +1048,7 @@ class Parser(object):
 
         if self.match('.'):
             self.nextToken()
-            if self.lookahead.type is Token.Identifier and self.context.inFunctionBody and self.lookahead.value == 'target':
+            if self.lookahead.type is Token.Identifier and self.context.inFunction and self.lookahead.value == 'target':
                 property = self.parseIdentifierName()
                 expr = Node.MetaProperty(id, property)
             else:
@@ -1041,7 +1066,9 @@ class Parser(object):
 
     def parseAsyncArgument(self):
         arg = self.parseAssignmentExpression()
-        self.context.firstCoverInitializedNameError = None
+        # Don't clear firstCoverInitializedNameError here — the caller (parseAsyncArguments)
+        # uses isolateCoverGrammar which checks it. The error will be cleared only when
+        # we confirm this is an async arrow function (has =>).
         return arg
 
     def parseAsyncArguments(self):
@@ -1052,7 +1079,10 @@ class Parser(object):
                 if self.match('...'):
                     expr = self.parseSpreadElement()
                 else:
-                    expr = self.isolateCoverGrammar(self.parseAsyncArgument)
+                    # Use inheritCoverGrammar instead of isolateCoverGrammar so that
+                    # firstCoverInitializedNameError is preserved (not immediately thrown).
+                    # The caller will check it after determining if this is an async arrow.
+                    expr = self.inheritCoverGrammar(self.parseAsyncArgument)
                 args.append(expr)
                 if self.match(')'):
                     break
@@ -1074,6 +1104,33 @@ class Parser(object):
 
         return match
 
+    def matchImportMeta(self):
+        match = self.matchKeyword('import')
+        if match:
+            state = self.scanner.saveState()
+            self.scanner.scanComments()
+            dot = self.scanner.lex()
+            if (dot.type is Token.Punctuator) and (dot.value == '.'):
+                self.scanner.scanComments()
+                meta = self.scanner.lex()
+                match = (meta.type is Token.Identifier) and (meta.value == 'meta')
+                if match:
+                    if meta.end - meta.start != len('meta'):
+                        self.tolerateUnexpectedToken(meta, Messages.InvalidEscapedReservedWord)
+            else:
+                match = False
+            self.scanner.restoreState(state)
+
+        return match
+
+    def parseImportMeta(self):
+        node = self.createNode()
+        id = self.parseIdentifierName()  # 'import'
+        self.expect('.')
+        property = self.parseIdentifierName()  # 'meta'
+        self.context.isAssignmentTarget = False
+        return self.finalize(node, Node.MetaProperty(id, property))
+
     def parseImportCall(self):
         node = self.createNode()
         self.expectKeyword('import')
@@ -1086,7 +1143,7 @@ class Parser(object):
         previousAllowIn = self.context.allowIn
         self.context.allowIn = True
 
-        if self.matchKeyword('super') and self.context.inFunctionBody:
+        if self.matchKeyword('super') and self.context.inFunction:
             expr = self.createNode()
             self.nextToken()
             expr = self.finalize(expr, Node.Super())
@@ -1095,15 +1152,15 @@ class Parser(object):
         else:
             expr = self.inheritCoverGrammar(self.parseNewExpression if self.matchKeyword('new') else self.parsePrimaryExpression)
 
+        hasOptional = False
         while True:
-            if self.match('.'):
-                self.context.isBindingElement = False
-                self.context.isAssignmentTarget = True
-                self.expect('.')
-                property = self.parseIdentifierName()
-                expr = self.finalize(self.startNode(startToken), Node.StaticMemberExpression(expr, property))
+            optional = False
+            if self.match('?.'):
+                optional = True
+                hasOptional = True
+                self.expect('?.')
 
-            elif self.match('('):
+            if self.match('('):
                 asyncArrow = maybeAsync and (startToken.lineNumber == self.lookahead.lineNumber)
                 self.context.isBindingElement = False
                 self.context.isAssignmentTarget = False
@@ -1111,29 +1168,58 @@ class Parser(object):
                     args = self.parseAsyncArguments()
                 else:
                     args = self.parseArguments()
-                if expr.type is Syntax.Import and len(args) != 1:
-                    self.tolerateError(Messages.BadImportCallArity)
-                expr = self.finalize(self.startNode(startToken), Node.CallExpression(expr, args))
+                if expr.type is Syntax.Import:
+                    if len(args) != 1:
+                        self.tolerateError(Messages.BadImportCallArity)
+                    for arg in args:
+                        if arg.type is Syntax.SpreadElement:
+                            self.tolerateError(Messages.BadImportCallArity)
+                expr = self.finalize(self.startNode(startToken), Node.CallExpression(expr, args, optional))
                 if asyncArrow and self.match('=>'):
+                    # This is an async arrow function — cover formals are valid, clear the error
+                    self.context.firstCoverInitializedNameError = None
                     for arg in args:
                         self.reinterpretExpressionAsPattern(arg)
                     expr = Node.AsyncArrowParameterPlaceHolder(args)
+                elif asyncArrow and self.context.firstCoverInitializedNameError is not None:
+                    # async(...) without => but with CoverInitializedName (e.g. async({x=y}))
+                    # is NOT a valid call expression
+                    self.throwUnexpectedToken(self.context.firstCoverInitializedNameError)
             elif self.match('['):
                 self.context.isBindingElement = False
-                self.context.isAssignmentTarget = True
+                self.context.isAssignmentTarget = not optional
                 self.expect('[')
                 property = self.isolateCoverGrammar(self.parseExpression)
                 self.expect(']')
-                expr = self.finalize(self.startNode(startToken), Node.ComputedMemberExpression(expr, property))
+                expr = self.finalize(self.startNode(startToken), Node.ComputedMemberExpression(expr, property, optional))
 
             elif self.lookahead.type is Token.Template and self.lookahead.head:
-                quasi = self.parseTemplateLiteral()
+                # Optional template literal is not in the spec
+                if optional:
+                    self.throwUnexpectedToken(self.lookahead)
+                if hasOptional:
+                    self.throwError(Messages.InvalidTaggedTemplateOnOptionalChain)
+                quasi = self.parseTemplateLiteral(is_tagged=True)
                 expr = self.finalize(self.startNode(startToken), Node.TaggedTemplateExpression(expr, quasi))
+
+            elif self.match('.') or optional:
+                self.context.isBindingElement = False
+                self.context.isAssignmentTarget = not optional
+                if not optional:
+                    self.expect('.')
+                if self.lookahead.type is Token.PrivateIdentifier:
+                    property = self.finalize(self.createNode(), Node.PrivateIdentifier(self.nextToken().value))
+                else:
+                    property = self.parseIdentifierName()
+                expr = self.finalize(self.startNode(startToken), Node.StaticMemberExpression(expr, property, optional))
 
             else:
                 break
 
         self.context.allowIn = previousAllowIn
+
+        if hasOptional:
+            return Node.ChainExpression(expr)
 
         return expr
 
@@ -1150,33 +1236,51 @@ class Parser(object):
         assert self.context.allowIn, 'callee of new expression always allow in keyword.'
 
         node = self.startNode(self.lookahead)
-        if self.matchKeyword('super') and self.context.inFunctionBody:
+        if self.matchKeyword('super') and self.context.inFunction:
             expr = self.parseSuper()
         else:
             expr = self.inheritCoverGrammar(self.parseNewExpression if self.matchKeyword('new') else self.parsePrimaryExpression)
 
+        hasOptional = False
         while True:
+            optional = False
+            if self.match('?.'):
+                optional = True
+                hasOptional = True
+                self.expect('?.')
+
             if self.match('['):
                 self.context.isBindingElement = False
-                self.context.isAssignmentTarget = True
+                self.context.isAssignmentTarget = not optional
                 self.expect('[')
                 property = self.isolateCoverGrammar(self.parseExpression)
                 self.expect(']')
-                expr = self.finalize(node, Node.ComputedMemberExpression(expr, property))
+                expr = self.finalize(node, Node.ComputedMemberExpression(expr, property, optional))
 
-            elif self.match('.'):
+            elif self.match('.') or optional:
                 self.context.isBindingElement = False
-                self.context.isAssignmentTarget = True
-                self.expect('.')
-                property = self.parseIdentifierName()
-                expr = self.finalize(node, Node.StaticMemberExpression(expr, property))
+                self.context.isAssignmentTarget = not optional
+                if not optional:
+                    self.expect('.')
+                if self.lookahead.type is Token.PrivateIdentifier:
+                    property = self.finalize(self.createNode(), Node.PrivateIdentifier(self.nextToken().value))
+                else:
+                    property = self.parseIdentifierName()
+                expr = self.finalize(node, Node.StaticMemberExpression(expr, property, optional))
 
             elif self.lookahead.type is Token.Template and self.lookahead.head:
-                quasi = self.parseTemplateLiteral()
+                if optional:
+                    self.throwUnexpectedToken(self.lookahead)
+                if hasOptional:
+                    self.throwError(Messages.InvalidTaggedTemplateOnOptionalChain)
+                quasi = self.parseTemplateLiteral(is_tagged=True)
                 expr = self.finalize(node, Node.TaggedTemplateExpression(expr, quasi))
 
             else:
                 break
+
+        if hasOptional:
+            return Node.ChainExpression(expr)
 
         return expr
 
@@ -1191,7 +1295,7 @@ class Parser(object):
             expr = self.inheritCoverGrammar(self.parseUnaryExpression)
             if self.context.strict and expr.type is Syntax.Identifier and self.scanner.isRestrictedWord(expr.name):
                 self.tolerateError(Messages.StrictLHSPrefix)
-            if not self.context.isAssignmentTarget:
+            if not self.context.isAssignmentTarget or expr.type is Syntax.MetaProperty:
                 self.tolerateError(Messages.InvalidLHSInAssignment)
             prefix = True
             expr = self.finalize(node, Node.UpdateExpression(token.value, expr, prefix))
@@ -1203,7 +1307,7 @@ class Parser(object):
                 if self.match('++', '--'):
                     if self.context.strict and expr.type is Syntax.Identifier and self.scanner.isRestrictedWord(expr.name):
                         self.tolerateError(Messages.StrictLHSPostfix)
-                    if not self.context.isAssignmentTarget:
+                    if not self.context.isAssignmentTarget or expr.type is Syntax.MetaProperty:
                         self.tolerateError(Messages.InvalidLHSInAssignment)
                     self.context.isAssignmentTarget = False
                     self.context.isBindingElement = False
@@ -1234,7 +1338,7 @@ class Parser(object):
                 self.tolerateError(Messages.StrictDelete)
             self.context.isAssignmentTarget = False
             self.context.isBindingElement = False
-        elif self.context.allowAwait and self.matchContextualKeyword('await'):
+        elif self.context.allow_await and self.matchContextualKeyword('await'):
             expr = self.parseAwaitExpression()
         else:
             expr = self.parseUpdateExpression()
@@ -1279,9 +1383,20 @@ class Parser(object):
 
         expr = self.inheritCoverGrammar(self.parseExponentiationExpression)
 
+        allowAndOr = True
+        allowNullishCoalescing = True
+
+        def updateNullishCoalescingRestrictions(token):
+            nonlocal allowAndOr, allowNullishCoalescing
+            if token.value == '&&' or token.value == '||':
+                allowNullishCoalescing = False
+            if token.value == '??':
+                allowAndOr = False
+
         token = self.lookahead
         prec = self.binaryPrecedence(token)
         if prec > 0:
+            updateNullishCoalescingRestrictions(token)
             self.nextToken()
 
             self.context.isAssignmentTarget = False
@@ -1297,6 +1412,13 @@ class Parser(object):
                 prec = self.binaryPrecedence(self.lookahead)
                 if prec <= 0:
                     break
+
+                updateNullishCoalescingRestrictions(self.lookahead)
+
+                # Validate nullish coalescing restrictions
+                if (self.lookahead.value == '??' and not allowNullishCoalescing) or \
+                   ((self.lookahead.value == '&&' or self.lookahead.value == '||') and not allowAndOr):
+                    self.tolerateError(Messages.NullishCoalescingNotAllowed)
 
                 # Reduce: make a binary expression from the three topmost entries.
                 while len(stack) > 2 and prec <= precedences[-1]:
@@ -1317,16 +1439,12 @@ class Parser(object):
             # Final reduce to clean-up the stack.
             i = len(stack) - 1
             expr = stack[i]
-
-            lastMarker = markers.pop()
+            markers.pop()
             while i > 1:
-                marker = markers.pop()
-                lastLineStart = lastMarker.lineStart if lastMarker else 0
-                node = self.startNode(marker, lastLineStart)
+                node = self.startNode(markers.pop())
                 operator = stack[i - 1]
                 expr = self.finalize(node, Node.BinaryExpression(operator, stack[i - 2], expr))
                 i -= 2
-                lastMarker = marker
 
         return expr
 
@@ -1355,6 +1473,40 @@ class Parser(object):
 
     # https://tc39.github.io/ecma262/#sec-assignment-operators
 
+    def _containsYieldExpression(self, node):
+        """Recursively check if an AST node tree contains any YieldExpression."""
+        if node is None:
+            return False
+        typ = node.type
+        if typ is Syntax.YieldExpression:
+            return True
+        if typ is Syntax.AssignmentPattern:
+            return self._containsYieldExpression(node.left) or self._containsYieldExpression(node.right)
+        if typ is Syntax.ArrayPattern:
+            for element in (node.elements or []):
+                if element is not None and self._containsYieldExpression(element):
+                    return True
+        if typ is Syntax.ObjectPattern:
+            for prop in (node.properties or []):
+                target = prop if prop.type is Syntax.RestElement else prop.value
+                if self._containsYieldExpression(target):
+                    return True
+        if typ is Syntax.RestElement:
+            return self._containsYieldExpression(node.argument)
+        if typ is Syntax.BinaryExpression:
+            return self._containsYieldExpression(node.left) or self._containsYieldExpression(node.right)
+        if typ is Syntax.CallExpression:
+            if self._containsYieldExpression(node.callee):
+                return True
+            for arg in (node.arguments or []):
+                if self._containsYieldExpression(arg):
+                    return True
+        if typ in (Syntax.UnaryExpression, Syntax.UpdateExpression):
+            return self._containsYieldExpression(node.argument)
+        if typ is Syntax.MemberExpression:
+            return self._containsYieldExpression(node.object)
+        return False
+
     def checkPatternParam(self, options, param):
         typ = param.type
         if typ is Syntax.Identifier:
@@ -1382,7 +1534,7 @@ class Parser(object):
             pass
         elif typ is Syntax.ArrowParameterPlaceHolder:
             params = expr.params
-            asyncArrow = expr.isAsync
+            asyncArrow = expr.is_async
         else:
             return None
 
@@ -1394,7 +1546,7 @@ class Parser(object):
         for param in params:
             if param.type is Syntax.AssignmentPattern:
                 if param.right.type is Syntax.YieldExpression:
-                    if param.right.argument:
+                    if not self.context.allowYield or param.right.argument:
                         self.throwUnexpectedToken(self.lookahead)
                     param.right.type = Syntax.Identifier
                     param.right.name = 'yield'
@@ -1407,6 +1559,8 @@ class Parser(object):
         if self.context.strict or not self.context.allowYield:
             for param in params:
                 if param.type is Syntax.YieldExpression:
+                    self.throwUnexpectedToken(self.lookahead)
+                if not self.context.allowYield and self._containsYieldExpression(param):
                     self.throwUnexpectedToken(self.lookahead)
 
         if options.message is Messages.StrictParamDupe:
@@ -1440,7 +1594,7 @@ class Parser(object):
                 # https://tc39.github.io/ecma262/#sec-arrow-function-definitions
                 self.context.isAssignmentTarget = False
                 self.context.isBindingElement = False
-                isAsync = expr.isAsync
+                isAsync = expr.is_async
                 list = self.reinterpretAsCoverFormalsList(expr)
 
                 if list:
@@ -1453,9 +1607,9 @@ class Parser(object):
                     self.context.allowStrictDirective = list.simple
 
                     previousAllowYield = self.context.allowYield
-                    previousAwait = self.context.allowAwait
+                    previousAwait = self.context.allow_await
                     self.context.allowYield = True
-                    self.context.allowAwait = isAsync
+                    self.context.allow_await = isAsync
 
                     node = self.startNode(startToken)
                     self.expect('=>')
@@ -1480,7 +1634,7 @@ class Parser(object):
                     self.context.strict = previousStrict
                     self.context.allowStrictDirective = previousAllowStrictDirective
                     self.context.allowYield = previousAllowYield
-                    self.context.allowAwait = previousAwait
+                    self.context.allow_await = previousAwait
             else:
                 if self.matchAssign():
                     if not self.context.isAssignmentTarget:
@@ -1496,6 +1650,9 @@ class Parser(object):
                     if not self.match('='):
                         self.context.isAssignmentTarget = False
                         self.context.isBindingElement = False
+                        # Compound assignment cannot target destructuring patterns
+                        if expr.type is Syntax.ArrayExpression or expr.type is Syntax.ObjectExpression:
+                            self.tolerateError(Messages.InvalidLHSInAssignment)
                     else:
                         self.reinterpretExpressionAsPattern(expr)
 
@@ -1540,6 +1697,8 @@ class Parser(object):
             elif value == 'import':
                 if self.matchImportCall():
                     statement = self.parseExpressionStatement()
+                elif self.matchImportMeta():
+                    statement = self.parseStatement()
                 else:
                     if not self.context.isModule:
                         self.tolerateUnexpectedToken(self.lookahead, Messages.IllegalImportDeclaration)
@@ -1552,8 +1711,19 @@ class Parser(object):
                 statement = self.parseClassDeclaration()
             elif value == 'let':
                 statement = self.parseLexicalDeclaration(Params(inFor=False)) if self.isLexicalDeclaration() else self.parseStatement()
+            elif value == 'await':
+                # await using x = expr; (ES2025) — handled by parseStatement
+                statement = self.parseStatement()
             else:
                 statement = self.parseStatement()
+        elif self.lookahead.type is Token.Identifier and self.lookahead.value == 'using':
+            statement = self.parseUsingDeclaration(isAsync=False)
+        elif self.lookahead.type is Token.Identifier and self.lookahead.value == 'await' and self.isAwaitUsing():
+            # ES2025: await using x = expr; (await is Identifier in modules)
+            statement = self.parseUsingDeclaration(isAsync=True)
+        elif self.lookahead.type is Token.Punctuator and self.lookahead.value == '@':
+            # Decorator followed by class declaration
+            statement = self.parseClassDeclaration()
         else:
             statement = self.parseStatement()
 
@@ -1737,10 +1907,7 @@ class Parser(object):
         pattern = self.parsePattern(params, kind)
         if self.match('='):
             self.nextToken()
-            previousAllowYield = self.context.allowYield
-            self.context.allowYield = True
             right = self.isolateCoverGrammar(self.parseAssignmentExpression)
-            self.context.allowYield = previousAllowYield
             pattern = self.finalize(self.startNode(startToken), Node.AssignmentPattern(pattern, right))
 
         return pattern
@@ -1762,7 +1929,7 @@ class Parser(object):
             else:
                 if self.context.strict or token.value != 'let' or kind != 'var':
                     self.throwUnexpectedToken(token)
-        elif (self.context.isModule or self.context.allowAwait) and token.type is Token.Identifier and token.value == 'await':
+        elif (self.context.isModule or self.context.allow_await) and token.type is Token.Identifier and token.value == 'await':
             self.tolerateUnexpectedToken(token)
 
         return self.finalize(node, Node.Identifier(token.value))
@@ -1804,6 +1971,21 @@ class Parser(object):
         self.consumeSemicolon()
 
         return self.finalize(node, Node.VariableDeclaration(declarations, 'var'))
+
+    def parseUsingDeclaration(self, isAsync=False):
+        """ES2025: using x = expr; or await using x = expr;"""
+        node = self.createNode()
+        if isAsync:
+            # 'await' is a contextual keyword (Identifier) in modules
+            token = self.nextToken()
+            if token.type not in (Token.Keyword, Token.Identifier) or token.value != 'await':
+                self.throwUnexpectedToken(token)
+        token = self.nextToken()
+        if token.type is not Token.Identifier or token.value != 'using':
+            self.throwUnexpectedToken(token)
+        declarations = self.parseVariableDeclarationList(Params(inFor=False))
+        self.consumeSemicolon()
+        return self.finalize(node, Node.VariableDeclaration(declarations, 'using'))
 
     # https://tc39.github.io/ecma262/#sec-empty-statement
 
@@ -1854,9 +2036,12 @@ class Parser(object):
         self.expectKeyword('do')
 
         previousInIteration = self.context.inIteration
+        previousInSingleStatementBody = self.context.inSingleStatementBody
         self.context.inIteration = True
+        self.context.inSingleStatementBody = True
         body = self.parseStatement()
         self.context.inIteration = previousInIteration
+        self.context.inSingleStatementBody = previousInSingleStatementBody
 
         self.expectKeyword('while')
         self.expect('(')
@@ -1887,9 +2072,12 @@ class Parser(object):
             self.expect(')')
 
             previousInIteration = self.context.inIteration
+            previousInSingleStatementBody = self.context.inSingleStatementBody
             self.context.inIteration = True
+            self.context.inSingleStatementBody = True
             body = self.parseStatement()
             self.context.inIteration = previousInIteration
+            self.context.inSingleStatementBody = previousInSingleStatementBody
 
         return self.finalize(node, Node.WhileStatement(test, body))
 
@@ -1903,9 +2091,15 @@ class Parser(object):
         forIn = True
         left = None
         right = None
+        isAwait = False
 
         node = self.createNode()
         self.expectKeyword('for')
+        if self.matchContextualKeyword('await'):
+            if not self.context.allow_await:
+                self.tolerateUnexpectedToken(self.lookahead)
+            isAwait = True
+            self.nextToken()
         self.expect('(')
 
         if self.match(';'):
@@ -2020,9 +2214,12 @@ class Parser(object):
             self.expect(')')
 
             previousInIteration = self.context.inIteration
+            previousInSingleStatementBody = self.context.inSingleStatementBody
             self.context.inIteration = True
+            self.context.inSingleStatementBody = True
             body = self.isolateCoverGrammar(self.parseStatement)
             self.context.inIteration = previousInIteration
+            self.context.inSingleStatementBody = previousInSingleStatementBody
 
         if left is None:
             return self.finalize(node, Node.ForStatement(init, test, update, body))
@@ -2030,7 +2227,7 @@ class Parser(object):
         if forIn:
             return self.finalize(node, Node.ForInStatement(left, right, body))
 
-        return self.finalize(node, Node.ForOfStatement(left, right, body))
+        return self.finalize(node, Node.ForOfStatement(left, right, body, isAwait))
 
     # https://tc39.github.io/ecma262/#sec-continue-statement
 
@@ -2046,6 +2243,8 @@ class Parser(object):
             key = '$' + id.name
             if key not in self.context.labelSet:
                 self.throwError(Messages.UnknownLabel, id.name)
+            elif not self.context.labelSet[key]:
+                self.throwError(Messages.IllegalContinue)
 
         self.consumeSemicolon()
         if label is None and not self.context.inIteration:
@@ -2084,12 +2283,8 @@ class Parser(object):
         self.expectKeyword('return')
 
         hasArgument = (
-            (
-                not self.match(';') and not self.match('}') and
-                not self.hasLineTerminator and self.lookahead.type is not Token.EOF
-            ) or
-            self.lookahead.type is Token.StringLiteral or
-            self.lookahead.type is Token.Template
+            not self.match(';') and not self.match('}') and
+            not self.hasLineTerminator and self.lookahead.type is not Token.EOF
         )
         argument = self.parseExpression() if hasArgument else None
         self.consumeSemicolon()
@@ -2113,7 +2308,10 @@ class Parser(object):
             body = self.finalize(self.createNode(), Node.EmptyStatement())
         else:
             self.expect(')')
+            previousInSingleStatementBody = self.context.inSingleStatementBody
+            self.context.inSingleStatementBody = True
             body = self.parseStatement()
+            self.context.inSingleStatementBody = previousInSingleStatementBody
 
         return self.finalize(node, Node.WithStatement(object, body))
 
@@ -2181,12 +2379,20 @@ class Parser(object):
             if key in self.context.labelSet:
                 self.throwError(Messages.Redeclaration, 'Label', id.name)
 
-            self.context.labelSet[key] = True
+            # Check if the labeled body is an iteration statement
+            isIterationLabel = self.lookahead.type is Token.Keyword and self.lookahead.value in ('do', 'for', 'while')
+            self.context.labelSet[key] = isIterationLabel
             if self.matchKeyword('class'):
                 self.tolerateUnexpectedToken(self.lookahead)
                 body = self.parseClassDeclaration()
+            elif self.matchAsyncFunction():
+                # Labeled body cannot be an async function declaration (ES2017+ restriction)
+                self.throwError(Messages.AsyncFunctionInLegacyContext)
             elif self.matchKeyword('function'):
                 token = self.lookahead
+                # Labeled sloppy function in single-statement context is also disallowed
+                if self.context.inSingleStatementBody and not self.context.strict:
+                    self.throwError(Messages.StrictFunction)
                 declaration = self.parseFunctionDeclaration()
                 if self.context.strict:
                     self.tolerateUnexpectedToken(token, Messages.StrictFunction)
@@ -2225,24 +2431,26 @@ class Parser(object):
 
         self.expectKeyword('catch')
 
-        self.expect('(')
-        if self.match(')'):
-            self.throwUnexpectedToken(self.lookahead)
+        param = None
+        if self.match('('):
+            self.expect('(')
+            if self.match(')'):
+                self.throwUnexpectedToken(self.lookahead)
 
-        params = []
-        param = self.parsePattern(params)
-        paramMap = {}
-        for p in params:
-            key = '$' + p.value
-            if key in paramMap:
-                self.tolerateError(Messages.DuplicateBinding, p.value)
-            paramMap[key] = True
+            params = []
+            param = self.parsePattern(params)
+            paramMap = {}
+            for p in params:
+                key = '$' + p.value
+                if key in paramMap:
+                    self.tolerateError(Messages.DuplicateBinding, p.value)
+                paramMap[key] = True
 
-        if self.context.strict and param.type is Syntax.Identifier:
-            if self.scanner.isRestrictedWord(param.name):
-                self.tolerateError(Messages.StrictCatchVariable)
+            if self.context.strict and param.type is Syntax.Identifier:
+                if self.scanner.isRestrictedWord(param.name):
+                    self.tolerateError(Messages.StrictCatchVariable)
 
-        self.expect(')')
+            self.expect(')')
         body = self.parseBlock()
 
         return self.finalize(node, Node.CatchClause(param, body))
@@ -2298,10 +2506,20 @@ class Parser(object):
                 statement = self.parseExpressionStatement()
 
         elif typ is Token.Identifier:
-            statement = self.parseFunctionDeclaration() if self.matchAsyncFunction() else self.parseLabelledStatement()
+            if self.matchContextualKeyword('using'):
+                statement = self.parseUsingDeclaration(isAsync=False)
+            elif self.matchContextualKeyword('await') and self.isAwaitUsing():
+                # ES2025: await using x = expr; (await is Identifier in modules)
+                statement = self.parseUsingDeclaration(isAsync=True)
+            elif self.context.inSingleStatementBody and self.lookahead.value == 'let' and self.isLexicalDeclaration():
+                self.throwError(Messages.LexicalDeclarationInSingleStatement)
+            else:
+                statement = self.parseFunctionDeclaration() if self.matchAsyncFunction() else self.parseLabelledStatement()
 
         elif typ is Token.Keyword:
             value = self.lookahead.value
+            if self.context.inSingleStatementBody and value in ('const', 'class'):
+                self.throwError(Messages.LexicalDeclarationInSingleStatement)
             if value == 'break':
                 statement = self.parseBreakStatement()
             elif value == 'continue':
@@ -2313,6 +2531,11 @@ class Parser(object):
             elif value == 'for':
                 statement = self.parseForStatement()
             elif value == 'function':
+                # Sloppy-mode function declarations are only allowed at top level,
+                # inside a block, or as the direct body of an if statement (Annex B.3.3).
+                # Single-statement contexts (for/while/do-while/with) don't qualify.
+                if self.context.inSingleStatementBody and not self.context.strict:
+                    self.throwError(Messages.StrictFunction)
                 statement = self.parseFunctionDeclaration()
             elif value == 'if':
                 statement = self.parseIfStatement()
@@ -2326,10 +2549,18 @@ class Parser(object):
                 statement = self.parseTryStatement()
             elif value == 'var':
                 statement = self.parseVariableStatement()
+            elif value == 'await':
+                # ES2025: await using x = expr;
+                statement = self.parseUsingDeclaration(isAsync=True)
             elif value == 'while':
                 statement = self.parseWhileStatement()
             elif value == 'with':
                 statement = self.parseWithStatement()
+            elif value == 'let':
+                # let is a Keyword but can be either lexical declaration or expression
+                if self.context.inSingleStatementBody and self.isLexicalDeclaration():
+                    self.throwError(Messages.LexicalDeclarationInSingleStatement)
+                statement = self.parseExpressionStatement()
             else:
                 statement = self.parseExpressionStatement()
 
@@ -2355,6 +2586,7 @@ class Parser(object):
         self.context.inIteration = False
         self.context.inSwitch = False
         self.context.inFunctionBody = True
+        self.context.inFunction = True
 
         while self.lookahead.type is not Token.EOF:
             if self.match('}'):
@@ -2419,6 +2651,9 @@ class Parser(object):
             firstRestricted=firstRestricted
         )
 
+        previousInFunction = self.context.inFunction
+        self.context.inFunction = True
+
         self.expect('(')
         if not self.match(')'):
             options.paramSet = {}
@@ -2430,6 +2665,13 @@ class Parser(object):
                 if self.match(')'):
                     break
         self.expect(')')
+
+        self.context.inFunction = previousInFunction
+
+        if not self.context.allowYield:
+            for param in options.params:
+                if self._containsYieldExpression(param):
+                    self.throwUnexpectedToken(self.lookahead)
 
         return Params(
             simple=options.simple,
@@ -2451,6 +2693,14 @@ class Parser(object):
 
         return match
 
+    def isAwaitUsing(self):
+        """Check if current 'await' token is followed by 'using' (ES2025 await using declaration)."""
+        state = self.scanner.saveState()
+        self.scanner.scanComments()
+        next = self.scanner.lex()
+        self.scanner.restoreState(state)
+        return next.type is Token.Identifier and next.value == 'using'
+
     def parseFunctionDeclaration(self, identifierIsOptional=False):
         node = self.createNode()
 
@@ -2460,7 +2710,7 @@ class Parser(object):
 
         self.expectKeyword('function')
 
-        isGenerator = False if isAsync else self.match('*')
+        isGenerator = self.match('*')
         if isGenerator:
             self.nextToken()
 
@@ -2481,9 +2731,9 @@ class Parser(object):
                     firstRestricted = token
                     message = Messages.StrictReservedWord
 
-        previousAllowAwait = self.context.allowAwait
+        previousAllowAwait = self.context.allow_await
         previousAllowYield = self.context.allowYield
-        self.context.allowAwait = isAsync
+        self.context.allow_await = isAsync
         self.context.allowYield = not isGenerator
 
         formalParameters = self.parseFormalParameters(firstRestricted)
@@ -2504,11 +2754,11 @@ class Parser(object):
 
         self.context.strict = previousStrict
         self.context.allowStrictDirective = previousAllowStrictDirective
-        self.context.allowAwait = previousAllowAwait
+        self.context.allow_await = previousAllowAwait
         self.context.allowYield = previousAllowYield
 
         if isAsync:
-            return self.finalize(node, Node.AsyncFunctionDeclaration(id, params, body))
+            return self.finalize(node, Node.AsyncFunctionDeclaration(id, params, body, isGenerator))
 
         return self.finalize(node, Node.FunctionDeclaration(id, params, body, isGenerator))
 
@@ -2521,16 +2771,16 @@ class Parser(object):
 
         self.expectKeyword('function')
 
-        isGenerator = False if isAsync else self.match('*')
+        isGenerator = self.match('*')
         if isGenerator:
             self.nextToken()
 
         id = None
         firstRestricted = None
 
-        previousAllowAwait = self.context.allowAwait
+        previousAllowAwait = self.context.allow_await
         previousAllowYield = self.context.allowYield
-        self.context.allowAwait = isAsync
+        self.context.allow_await = isAsync
         self.context.allowYield = not isGenerator
 
         if not self.match('('):
@@ -2564,11 +2814,11 @@ class Parser(object):
             self.tolerateUnexpectedToken(stricted, message)
         self.context.strict = previousStrict
         self.context.allowStrictDirective = previousAllowStrictDirective
-        self.context.allowAwait = previousAllowAwait
+        self.context.allow_await = previousAllowAwait
         self.context.allowYield = previousAllowYield
 
         if isAsync:
-            return self.finalize(node, Node.AsyncFunctionExpression(id, params, body))
+            return self.finalize(node, Node.AsyncFunctionExpression(id, params, body, isGenerator))
 
         return self.finalize(node, Node.FunctionExpression(id, params, body, isGenerator))
 
@@ -2579,7 +2829,7 @@ class Parser(object):
 
         node = self.createNode()
         expr = self.parseExpression()
-        directive = self.getTokenRaw(token)[1:-1] if expr.type is Syntax.Literal else None
+        directive = self.getTokenRaw(token)[1:-1] if expr.type is Syntax.StringLiteral else None
         self.consumeSemicolon()
 
         return self.finalize(node, Node.Directive(expr, directive) if directive else Node.ExpressionStatement(expr))
@@ -2622,6 +2872,7 @@ class Parser(object):
             Token.NullLiteral,
             Token.NumericLiteral,
             Token.Keyword,
+            Token.PrivateIdentifier,
         ):
             return True
         elif typ is Token.Punctuator:
@@ -2633,7 +2884,7 @@ class Parser(object):
 
         isGenerator = False
         previousAllowYield = self.context.allowYield
-        self.context.allowYield = not isGenerator
+        self.context.allowYield = False
         formalParameters = self.parseFormalParameters()
         if len(formalParameters.params) > 0:
             self.tolerateError(Messages.BadGetterArity)
@@ -2647,7 +2898,7 @@ class Parser(object):
 
         isGenerator = False
         previousAllowYield = self.context.allowYield
-        self.context.allowYield = not isGenerator
+        self.context.allowYield = False
         formalParameters = self.parseFormalParameters()
         if len(formalParameters.params) != 1:
             self.tolerateError(Messages.BadSetterArity)
@@ -2664,7 +2915,7 @@ class Parser(object):
         isGenerator = True
         previousAllowYield = self.context.allowYield
 
-        self.context.allowYield = True
+        self.context.allowYield = not isGenerator
         params = self.parseFormalParameters()
         self.context.allowYield = False
         method = self.parsePropertyMethod(params)
@@ -2708,6 +2959,21 @@ class Parser(object):
 
     # https://tc39.github.io/ecma262/#sec-class-definitions
 
+    def parseDecorator(self):
+        """Parse a single decorator: @expr or @expr(args)"""
+        node = self.createNode()
+        self.expect('@')
+        # Parse the decorator expression (identifier, member access, or call)
+        expr = self.parseLeftHandSideExpressionAllowCall()
+        return self.finalize(node, Node.Decorator(expr))
+
+    def parseDecoratorList(self):
+        """Parse a list of decorators before a class or class element."""
+        decorators = []
+        while self.match('@'):
+            decorators.append(self.parseDecorator())
+        return decorators
+
     def parseClassElement(self, hasConstructor):
         token = self.lookahead
         node = self.createNode()
@@ -2721,27 +2987,45 @@ class Parser(object):
 
         if self.match('*'):
             self.nextToken()
+            computed = self.match('[')
+            key = self.parseObjectPropertyKey()
+            value = self.parseGeneratorMethod()
+            kind = 'method'
 
         else:
             computed = self.match('[')
             key = self.parseObjectPropertyKey()
             id = key
-            if id.name == 'static' and (self.qualifiedPropertyName(self.lookahead) or self.match('*')):
-                token = self.lookahead
-                isStatic = True
-                computed = self.match('[')
-                if self.match('*'):
+            if hasattr(id, 'name') and id.name == 'static':
+                if self.match('{'):
+                    # ES2022: Static initialization block
                     self.nextToken()
-                else:
-                    key = self.parseObjectPropertyKey()
+                    body = self.parseDirectivePrologues()
+                    while self.lookahead.type is not Token.EOF:
+                        if self.match('}'):
+                            break
+                        body.append(self.parseStatementListItem())
+                    self.expect('}')
+                    return self.finalize(node, Node.StaticBlock(body))
+                elif self.qualifiedPropertyName(self.lookahead) or self.match('*'):
+                    token = self.lookahead
+                    isStatic = True
+                    computed = self.match('[')
+                    if self.match('*'):
+                        self.nextToken()
+                    else:
+                        key = self.parseObjectPropertyKey()
             if token.type is Token.Identifier and not self.hasLineTerminator and token.value == 'async':
                 punctuator = self.lookahead.value
                 if punctuator != ':' and punctuator != '(' and punctuator != '*':
                     isAsync = True
                     token = self.lookahead
                     key = self.parseObjectPropertyKey()
-                    if token.type is Token.Identifier and token.value == 'constructor':
-                        self.tolerateUnexpectedToken(token, Messages.ConstructorIsAsync)
+                    if token.type is Token.Identifier:
+                        if token.value == 'get' or token.value == 'set':
+                            self.tolerateUnexpectedToken(token)
+                        elif token.value == 'constructor':
+                            self.tolerateUnexpectedToken(token, Messages.ConstructorIsAsync)
 
         lookaheadPropertyKey = self.qualifiedPropertyName(self.lookahead)
         if token.type is Token.Identifier:
@@ -2760,14 +3044,30 @@ class Parser(object):
                 kind = 'init'
                 id = self.finalize(node, Node.Identifier(token.value))
                 if self.match('='):
+                    self.context.firstCoverInitializedNameError = self.lookahead
                     self.nextToken()
-                    value = self.parseAssignmentExpression()
+                    value = self.isolateCoverGrammar(self.parseAssignmentExpression)
+                else:
+                    value = id  # ??
 
         elif token.type is Token.Punctuator and token.value == '*' and lookaheadPropertyKey:
-            kind = 'method'
             computed = self.match('[')
             key = self.parseObjectPropertyKey()
             value = self.parseGeneratorMethod()
+
+        elif token.type is Token.PrivateIdentifier:
+            # ES2022: Private field or method
+            if self.match('('):
+                # Private method
+                kind = 'method'
+                value = self.parsePropertyMethodFunction()
+            elif self.config.classProperties:
+                # Private field
+                kind = 'init'
+                if self.match('='):
+                    self.context.firstCoverInitializedNameError = self.lookahead
+                    self.nextToken()
+                    value = self.isolateCoverGrammar(self.parseAssignmentExpression)
 
         if not kind and key and self.match('('):
             kind = 'method'
@@ -2789,10 +3089,16 @@ class Parser(object):
                 kind = 'constructor'
 
         if kind in ('constructor', 'method', 'get', 'set'):
-            return self.finalize(node, Node.MethodDefinition(key, computed, value, kind, isStatic))
-
+            return self.finalize(node, Node.ClassMethod(
+                key, computed,
+                value.generator if value else False,
+                value.is_async if value else False,
+                value.params if value else [],
+                value.body if value else None,
+                kind, isStatic
+            ))
         else:
-            return self.finalize(node, Node.FieldDefinition(key, computed, value, kind, isStatic))
+            return self.finalize(node, Node.ClassProperty(key, computed, value, isStatic))
 
     def parseClassElementList(self):
         body = []
@@ -2803,7 +3109,13 @@ class Parser(object):
             if self.match(';'):
                 self.nextToken()
             else:
-                body.append(self.parseClassElement(hasConstructor))
+                decorators = self.parseDecoratorList()
+                element = self.parseClassElement(hasConstructor)
+                # Attach decorators to the element
+                if decorators:
+                    if hasattr(element, 'decorators'):
+                        element.decorators = decorators
+                body.append(element)
         self.expect('}')
 
         return body
@@ -2817,6 +3129,8 @@ class Parser(object):
     def parseClassDeclaration(self, identifierIsOptional=False):
         node = self.createNode()
 
+        decorators = self.parseDecoratorList()
+
         previousStrict = self.context.strict
         self.context.strict = True
         self.expectKeyword('class')
@@ -2829,10 +3143,12 @@ class Parser(object):
         classBody = self.parseClassBody()
         self.context.strict = previousStrict
 
-        return self.finalize(node, Node.ClassDeclaration(id, superClass, classBody))
+        return self.finalize(node, Node.ClassDeclaration(id, superClass, classBody, decorators=decorators))
 
     def parseClassExpression(self):
         node = self.createNode()
+
+        decorators = self.parseDecoratorList()
 
         previousStrict = self.context.strict
         self.context.strict = True
@@ -2845,7 +3161,7 @@ class Parser(object):
         classBody = self.parseClassBody()
         self.context.strict = previousStrict
 
-        return self.finalize(node, Node.ClassExpression(id, superClass, classBody))
+        return self.finalize(node, Node.ClassExpression(id, superClass, classBody, decorators=decorators))
 
     # https://tc39.github.io/ecma262/#sec-scripts
     # https://tc39.github.io/ecma262/#sec-modules
@@ -2853,7 +3169,7 @@ class Parser(object):
     def parseModule(self):
         self.context.strict = True
         self.context.isModule = True
-        self.scanner.isModule = True
+        self.context.allow_await = True
         node = self.createNode()
         body = self.parseDirectivePrologues()
         while self.lookahead.type is not Token.EOF:
@@ -2877,7 +3193,7 @@ class Parser(object):
 
         token = self.nextToken()
         raw = self.getTokenRaw(token)
-        return self.finalize(node, Node.Literal(token.value, raw))
+        return self.finalize(node, Node.StringLiteral(token.value, raw))
 
     # import {<foo as bar>} ...
     def parseImportSpecifier(self):
@@ -2930,6 +3246,32 @@ class Parser(object):
 
         return self.finalize(node, Node.ImportNamespaceSpecifier(local))
 
+    def parseImportAttributes(self):
+        """Parse import attributes: { key: "value", ... }"""
+        self.expect('{')
+        attributes = []
+        while not self.match('}'):
+            node = self.createNode()
+            # Key can be identifier or string
+            if self.lookahead.type is Token.StringLiteral:
+                key = self.finalize(node, Node.StringLiteral(self.lookahead.value, self.getTokenRaw(self.lookahead)))
+                self.nextToken()
+            else:
+                key = self.parseIdentifierName()
+            self.expect(':')
+            # Value must be string
+            if self.lookahead.type is not Token.StringLiteral:
+                self.throwUnexpectedToken(self.lookahead)
+            value_node = self.createNode()
+            value = self.finalize(value_node, Node.StringLiteral(self.lookahead.value, self.getTokenRaw(self.lookahead)))
+            self.nextToken()
+            attr_node = self.createNode()
+            attributes.append(self.finalize(attr_node, Node.ImportAttribute(key, value)))
+            if not self.match('}'):
+                self.expect(',')
+        self.expect('}')
+        return attributes
+
     def parseImportDeclaration(self):
         if self.context.inFunctionBody:
             self.throwError(Messages.IllegalImportDeclaration)
@@ -2969,9 +3311,16 @@ class Parser(object):
                 self.throwError(message, self.lookahead.value)
             self.nextToken()
             src = self.parseModuleSpecifier()
+
+        # ES2025: Import attributes
+        attributes = None
+        if self.matchKeyword('with'):
+            self.nextToken()
+            attributes = self.parseImportAttributes()
+
         self.consumeSemicolon()
 
-        return self.finalize(node, Node.ImportDeclaration(specifiers, src))
+        return self.finalize(node, Node.ImportDeclaration(specifiers, src, attributes))
 
     # https://tc39.github.io/ecma262/#sec-exports
 
@@ -2985,11 +3334,6 @@ class Parser(object):
             exported = self.parseIdentifierName()
 
         return self.finalize(node, Node.ExportSpecifier(local, exported))
-
-    def parseExportDefaultSpecifier(self):
-        node = self.createNode()
-        local = self.parseIdentifierName()
-        return self.finalize(node, Node.ExportDefaultSpecifier(local))
 
     def parseExportDeclaration(self):
         if self.context.inFunctionBody:
@@ -3019,15 +3363,8 @@ class Parser(object):
             else:
                 if self.matchContextualKeyword('from'):
                     self.throwError(Messages.UnexpectedToken, self.lookahead.value)
-                # export default {}
-                # export default []
-                # export default (1 + 2)
-                if self.match('{'):
-                    declaration = self.parseObjectInitializer()
-                elif self.match('['):
-                    declaration = self.parseArrayInitializer()
-                else:
-                    declaration = self.parseAssignmentExpression()
+                # export default expression
+                declaration = self.parseAssignmentExpression()
                 self.consumeSemicolon()
                 exportDeclaration = self.finalize(node, Node.ExportDefaultDeclaration(declaration))
 
@@ -3069,22 +3406,13 @@ class Parser(object):
             source = None
             isExportFromIdentifier = False
 
-            expectSpecifiers = True
-            if self.lookahead.type is Token.Identifier:
-                specifiers.append(self.parseExportDefaultSpecifier())
-                if self.match(','):
-                    self.nextToken()
-                else:
-                    expectSpecifiers = False
-
-            if expectSpecifiers:
-                self.expect('{')
-                while not self.match('}'):
-                    isExportFromIdentifier = isExportFromIdentifier or self.matchKeyword('default')
-                    specifiers.append(self.parseExportSpecifier())
-                    if not self.match('}'):
-                        self.expect(',')
-                self.expect('}')
+            self.expect('{')
+            while not self.match('}'):
+                isExportFromIdentifier = isExportFromIdentifier or self.matchKeyword('default')
+                specifiers.append(self.parseExportSpecifier())
+                if not self.match('}'):
+                    self.expect(',')
+            self.expect('}')
 
             if self.matchContextualKeyword('from'):
                 # export {default} from 'foo'

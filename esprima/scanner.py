@@ -69,7 +69,7 @@ class Comment(Object):
 
 
 class RawToken(Object):
-    def __init__(self, type=None, value=None, pattern=None, flags=None, regex=None, octal=None, cooked=None, head=None, tail=None, lineNumber=None, lineStart=None, start=None, end=None):
+    def __init__(self, type=None, value=None, pattern=None, flags=None, regex=None, octal=None, cooked=None, head=None, tail=None, lineNumber=None, lineStart=None, start=None, end=None, notEscapeSequenceHead=None):
         self.type = type
         self.value = value
         self.pattern = pattern
@@ -83,6 +83,7 @@ class RawToken(Object):
         self.lineStart = lineStart
         self.start = start
         self.end = end
+        self.notEscapeSequenceHead = notEscapeSequenceHead
 
 
 class ScannerState(Object):
@@ -103,13 +104,27 @@ class Scanner(object):
         self.source = unicode(code) + '\x00'
         self.errorHandler = handler
         self.trackComment = False
-        self.isModule = False
 
         self.length = len(code)
         self.index = 0
         self.lineNumber = 1 if self.length > 0 else 0
         self.lineStart = 0
         self.curlyStack = []
+
+        # ES2023: Hashbang grammar — skip #! at the very start of input
+        if self.length >= 2 and code[0] == '#' and code[1] == '!':
+            # Skip the entire first line
+            idx = 2
+            while idx < self.length and code[idx] not in ('\r', '\n', '\u2028', '\u2029'):
+                idx += 1
+            if idx < self.length:
+                if code[idx] == '\r' and idx + 1 < self.length and code[idx + 1] == '\n':
+                    idx += 2
+                else:
+                    idx += 1
+            self.index = idx
+            self.lineNumber = 2
+            self.lineStart = idx
 
     def saveState(self):
         return ScannerState(
@@ -298,7 +313,7 @@ class Scanner(object):
                 else:
                     break
 
-            elif ch == '<' and not self.isModule:  # U+003C is '<'
+            elif ch == '<':  # U+003C is '<'
                 if self.source[self.index + 1:self.index + 4] == '!--':
                     self.index += 4  # `<!--`
                     comment = self.skipSingleLineComment(4)
@@ -446,6 +461,8 @@ class Scanner(object):
             if self.source[self.index] == '{':
                 self.index += 1
                 ch = self.scanUnicodeCodePointEscape()
+                if not ch or not Character.isIdentifierStart(ch[0]):
+                    self.throwUnexpectedToken()
             else:
                 ch = self.scanHexEscape('u')
                 if not ch or ch == '\\' or not Character.isIdentifierStart(ch[0]):
@@ -472,6 +489,8 @@ class Scanner(object):
                 if self.source[self.index] == '{':
                     self.index += 1
                     ch = self.scanUnicodeCodePointEscape()
+                    if not ch or not Character.isIdentifierPart(ch[0]):
+                        self.throwUnexpectedToken()
                 else:
                     ch = self.scanHexEscape('u')
                     if not ch or ch == '\\' or not Character.isIdentifierPart(ch[0]):
@@ -535,6 +554,28 @@ class Scanner(object):
             end=self.index
         )
 
+    def scanPrivateIdentifier(self):
+        """Scan a private identifier: #identifier (ES2022)."""
+        start = self.index
+        self.index += 1  # skip #
+
+        # Must be followed by a valid identifier start
+        ch = self.source[self.index] if not self.eof() else ''
+        if not Character.isIdentifierStart(ch):
+            self.tolerateUnexpectedToken()
+
+        id = self.getIdentifier()
+        value = '#' + id
+
+        return RawToken(
+            type=Token.PrivateIdentifier,
+            value=value,
+            lineNumber=self.lineNumber,
+            lineStart=self.lineStart,
+            start=start,
+            end=self.index
+        )
+
     # https://tc39.github.io/ecma262/#sec-punctuators
 
     def scanPunctuator(self):
@@ -570,10 +611,27 @@ class Scanner(object):
             '[',
             ']',
             ':',
-            '?',
             '~',
         ):
             self.index += 1
+
+        elif str == '?':
+            self.index += 1
+            if self.source[self.index:self.index + 1] == '?':
+                if self.source[self.index + 1:self.index + 2] == '=':
+                    # Logical nullish assignment: ??=
+                    self.index += 2
+                    str = '??='
+                else:
+                    # Nullish coalescing: ??
+                    self.index += 1
+                    str = '??'
+            elif self.source[self.index:self.index + 1] == '.':
+                # Optional chaining: ?.
+                # Only if not followed by a digit (e.g., ?.9 is ? followed by .9)
+                if not self.source[self.index + 1:self.index + 2].isdigit():
+                    self.index += 1
+                    str = '?.'
 
         else:
             # 4-character punctuator.
@@ -586,7 +644,8 @@ class Scanner(object):
                 str = str[:3]
                 if str in (
                     '===', '!==', '>>>',
-                    '<<=', '>>=', '**='
+                    '<<=', '>>=', '**=',
+                    '&&=', '||=', '??='
                 ):
                     self.index += 3
                 else:
@@ -605,7 +664,7 @@ class Scanner(object):
 
                         # 1-character punctuators.
                         str = self.source[self.index]
-                        if str in '<>=!+-*%&|^/':
+                        if str in '<>=!+-*%&|^/@':
                             self.index += 1
 
         if self.index == start:
@@ -626,7 +685,11 @@ class Scanner(object):
         num = ''
 
         while not self.eof():
-            if not Character.isHexDigit(self.source[self.index]):
+            ch = self.source[self.index]
+            if ch == '_':
+                self.index += 1
+                continue
+            if not Character.isHexDigit(ch):
                 break
 
             num += self.source[self.index]
@@ -635,7 +698,7 @@ class Scanner(object):
         if len(num) == 0:
             self.throwUnexpectedToken()
 
-        if Character.isIdentifierStart(self.source[self.index]):
+        if Character.isIdentifierStart(self.source[self.index]) or self.source[self.index] == '_':
             self.throwUnexpectedToken()
 
         return RawToken(
@@ -652,6 +715,9 @@ class Scanner(object):
 
         while not self.eof():
             ch = self.source[self.index]
+            if ch == '_':
+                self.index += 1
+                continue
             if ch != '0' and ch != '1':
                 break
 
@@ -664,7 +730,7 @@ class Scanner(object):
 
         if not self.eof():
             ch = self.source[self.index]
-            if Character.isIdentifierStart(ch) or Character.isDecimalDigit(ch):
+            if Character.isIdentifierStart(ch) or Character.isDecimalDigit(ch) or ch == '_':
                 self.throwUnexpectedToken()
 
         return RawToken(
@@ -686,7 +752,11 @@ class Scanner(object):
         self.index += 1
 
         while not self.eof():
-            if not Character.isOctalDigit(self.source[self.index]):
+            ch = self.source[self.index]
+            if ch == '_':
+                self.index += 1
+                continue
+            if not Character.isOctalDigit(ch):
                 break
 
             num += self.source[self.index]
@@ -696,7 +766,8 @@ class Scanner(object):
             # only 0o or 0O
             self.throwUnexpectedToken()
 
-        if Character.isIdentifierStart(self.source[self.index]) or Character.isDecimalDigit(self.source[self.index]):
+        ch = self.source[self.index]
+        if Character.isIdentifierStart(ch) or Character.isDecimalDigit(ch) or ch == '_':
             self.throwUnexpectedToken()
 
         return RawToken(
@@ -751,7 +822,13 @@ class Scanner(object):
                     if self.isImplicitOctalLiteral():
                         return self.scanOctalLiteral(ch, start)
 
-            while Character.isDecimalDigit(self.source[self.index]):
+            while True:
+                ch = self.source[self.index]
+                if ch == '_':
+                    self.index += 1
+                    continue
+                if not Character.isDecimalDigit(ch):
+                    break
                 num += self.source[self.index]
                 self.index += 1
 
@@ -760,7 +837,13 @@ class Scanner(object):
         if ch == '.':
             num += self.source[self.index]
             self.index += 1
-            while Character.isDecimalDigit(self.source[self.index]):
+            while True:
+                ch = self.source[self.index]
+                if ch == '_':
+                    self.index += 1
+                    continue
+                if not Character.isDecimalDigit(ch):
+                    break
                 num += self.source[self.index]
                 self.index += 1
 
@@ -775,8 +858,14 @@ class Scanner(object):
                 num += self.source[self.index]
                 self.index += 1
 
-            if Character.isDecimalDigit(self.source[self.index]):
-                while Character.isDecimalDigit(self.source[self.index]):
+            if Character.isDecimalDigit(self.source[self.index]) or self.source[self.index] == '_':
+                while True:
+                    ch = self.source[self.index]
+                    if ch == '_':
+                        self.index += 1
+                        continue
+                    if not Character.isDecimalDigit(ch):
+                        break
                     num += self.source[self.index]
                     self.index += 1
 
@@ -786,10 +875,17 @@ class Scanner(object):
         if Character.isIdentifierStart(self.source[self.index]):
             self.throwUnexpectedToken()
 
+        # Legacy non-octal decimal: 08, 09 are SyntaxError in strict mode (Annex B.1.1)
+        # Check if raw starts with '0' followed by '8' or '9' (no radix prefix, no decimal point before them)
+        raw = self.source[start:self.index]
+        legacy_octal_like = (len(raw) >= 2 and raw[0] == '0' and raw[1] in '89'
+                             and '.' not in raw[:raw.find('e') if 'e' in raw.lower() else len(raw)])
+
         value = float(num)
         return RawToken(
             type=Token.NumericLiteral,
             value=int(value) if value.is_integer() else value,
+            octal=legacy_octal_like or None,
             lineNumber=self.lineNumber,
             lineStart=self.lineStart,
             start=start,
@@ -823,11 +919,11 @@ class Scanner(object):
                             self.index += 1
                             str += self.scanUnicodeCodePointEscape()
                         else:
-                            unescapedChar = self.scanHexEscape(ch)
-                            if not unescapedChar:
+                            unescaped = self.scanHexEscape(ch)
+                            if not unescaped:
                                 self.throwUnexpectedToken()
 
-                            str += unescapedChar
+                            str += unescaped
 
                     elif ch == 'x':
                         unescaped = self.scanHexEscape(ch)
@@ -895,6 +991,9 @@ class Scanner(object):
         cooked = ''
         terminated = False
         start = self.index
+        startLineNumber = self.lineNumber
+        startLineStart = self.lineStart
+        notEscapeSequenceHead = None
 
         head = self.source[start] == '`'
         tail = False
@@ -922,7 +1021,10 @@ class Scanner(object):
                 ch = self.source[self.index]
                 self.index += 1
                 if not Character.isLineTerminator(ch):
-                    if ch == 'n':
+                    if notEscapeSequenceHead is not None:
+                        # Already in invalid escape state, skip processing
+                        pass
+                    elif ch == 'n':
                         cooked += '\n'
                     elif ch == 'r':
                         cooked += '\r'
@@ -934,19 +1036,21 @@ class Scanner(object):
                             cooked += self.scanUnicodeCodePointEscape()
                         else:
                             restore = self.index
-                            unescapedChar = self.scanHexEscape(ch)
-                            if unescapedChar:
-                                cooked += unescapedChar
+                            unescaped = self.scanHexEscape(ch)
+                            if unescaped:
+                                cooked += unescaped
                             else:
                                 self.index = restore
-                                cooked += ch
+                                notEscapeSequenceHead = self.index - 2
+                                cooked = None
 
                     elif ch == 'x':
                         unescaped = self.scanHexEscape(ch)
                         if not unescaped:
-                            self.throwUnexpectedToken(Messages.InvalidHexEscapeSequence)
-
-                        cooked += unescaped
+                            notEscapeSequenceHead = self.index - 2
+                            cooked = None
+                        else:
+                            cooked += unescaped
                     elif ch == 'b':
                         cooked += '\b'
                     elif ch == 'f':
@@ -958,12 +1062,14 @@ class Scanner(object):
                         if ch == '0':
                             if Character.isDecimalDigit(self.source[self.index]):
                                 # Illegal: \01 \02 and so on
-                                self.throwUnexpectedToken(Messages.TemplateOctalLiteral)
-
-                            cooked += '\0'
+                                notEscapeSequenceHead = self.index - 2
+                                cooked = None
+                            else:
+                                cooked += '\0'
                         elif Character.isOctalDigit(ch):
                             # Illegal: \1 \2
-                            self.throwUnexpectedToken(Messages.TemplateOctalLiteral)
+                            notEscapeSequenceHead = self.index - 2
+                            cooked = None
                         else:
                             cooked += ch
 
@@ -980,9 +1086,11 @@ class Scanner(object):
                     self.index += 1
 
                 self.lineStart = self.index
-                cooked += '\n'
+                if cooked is not None:
+                    cooked += '\n'
             else:
-                cooked += ch
+                if cooked is not None:
+                    cooked += ch
 
         if not terminated:
             self.throwUnexpectedToken()
@@ -994,13 +1102,14 @@ class Scanner(object):
         return RawToken(
             type=Token.Template,
             value=self.source[start + 1:self.index - rawOffset],
-            cooked=cooked,
+            cooked=cooked if notEscapeSequenceHead is None else None,
             head=head,
             tail=tail,
-            lineNumber=self.lineNumber,
-            lineStart=self.lineStart,
+            lineNumber=startLineNumber,
+            lineStart=startLineStart,
             start=start,
-            end=self.index
+            end=self.index,
+            notEscapeSequenceHead=notEscapeSequenceHead
         )
 
     # https://tc39.github.io/ecma262/#sec-literals-regular-expression-literals
@@ -1013,24 +1122,32 @@ class Scanner(object):
         # scenarios. For example, `[\u{1044f}-\u{10440}]` is an invalid
         # pattern that would not be detected by this substitution.
         astralSubstitute = '\uFFFF'
+        tmp = pattern
 
-        # Replace every Unicode escape sequence with the equivalent
-        # BMP character or a constant ASCII code point in the case of
-        # astral symbols. (See the above note on `astralSubstitute`
-        # for more information.)
-        def astralSub(m):
-            codePoint = int(m.group(1) or m.group(2), 16)
-            if codePoint > 0x10FFFF:
-                self.tolerateUnexpectedToken(Messages.InvalidRegExp)
-            elif codePoint <= 0xFFFF:
-                return uchr(codePoint)
-            return astralSubstitute
-        pattern = re.sub(r'\\u\{([0-9a-fA-F]+)\}|\\u([a-fA-F0-9]{4})', astralSub, pattern)
+        if 'u' in flags:
+            # Replace every Unicode escape sequence with the equivalent
+            # BMP character or a constant ASCII code point in the case of
+            # astral symbols. (See the above note on `astralSubstitute`
+            # for more information.)
+            def astralSub(m):
+                codePoint = int(m.group(1) or m.group(2), 16)
+                if codePoint > 0x10FFFF:
+                    self.throwUnexpectedToken(Messages.InvalidRegExp)
+                if codePoint <= 0xFFFF:
+                    return uchr(codePoint)
+                return astralSubstitute
+            tmp = re.sub(r'\\u\{([0-9a-fA-F]+)\}|\\u([a-fA-F0-9]{4})', astralSub, tmp)
 
-        # Replace each paired surrogate with a single ASCII symbol to
-        # avoid throwing on regular expressions that are only valid in
-        # combination with the "u" flag.
-        pattern = re.sub(r'[\uD800-\uDBFF][\uDC00-\uDFFF]', astralSubstitute, pattern)
+            # Replace each paired surrogate with a single ASCII symbol to
+            # avoid throwing on regular expressions that are only valid in
+            # combination with the "u" flag.
+            tmp = re.sub(r'[\uD800-\uDBFF][\uDC00-\uDFFF]', astralSubstitute, tmp)
+
+        # First, detect invalid regular expressions.
+        try:
+            re.compile(tmp)
+        except Exception:
+            self.throwUnexpectedToken(Messages.InvalidRegExp)
 
         # Return a regular expression object for this pattern-flag pair, or
         # `null` in case the current environment doesn't support the flags it
@@ -1039,7 +1156,7 @@ class Scanner(object):
         try:
             return re.compile(pattern, pyflags)
         except Exception:
-            self.tolerateUnexpectedToken(Messages.InvalidRegExp)
+            return None
 
     def scanRegExpBody(self):
         ch = self.source[self.index]
@@ -1169,6 +1286,10 @@ class Scanner(object):
                 return self.scanNumericLiteral()
 
             return self.scanPunctuator()
+
+        # Private identifier starts with # (U+0023) followed by identifier start.
+        if ch == '#':
+            return self.scanPrivateIdentifier()
 
         if Character.isDecimalDigit(ch):
             return self.scanNumericLiteral()

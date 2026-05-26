@@ -88,3 +88,8 @@ class Messages:
     UnexpectedTokenIllegal = "Unexpected token ILLEGAL"
     UnknownLabel = "Undefined label '%0'"
     UnterminatedRegExp = "Invalid regular expression: missing /"
+    CannotUseImportMetaOutsideAModule = "The keyword 'import.meta' is only allowed in module code"
+    NullishCoalescingNotAllowed = "Nullish coalescing operator(??) requires parens when mixed with logical operators"
+    InvalidTaggedTemplateOnOptionalChain = "Invalid tagged template on optional chain"
+    LexicalDeclarationInSingleStatement = "Lexical declaration cannot appear in a single-statement context"
+    AsyncFunctionInLegacyContext = "Async functions can only be declared at the top level or inside a block"
