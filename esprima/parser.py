@@ -689,7 +689,8 @@ class Parser(object):
         node = self.createNode()
 
         previousAllowYield = self.context.allowYield
-        self.context.allowYield = False
+        # In non-generator methods, yield is a valid identifier (sloppy mode)
+        self.context.allowYield = True
         params = self.parseFormalParameters()
         method = self.parsePropertyMethod(params)
         self.context.allowYield = previousAllowYield
@@ -898,7 +899,9 @@ class Parser(object):
             Syntax.RestElement,
             Syntax.AssignmentPattern,
         ):
-            pass
+            if typ is Syntax.Identifier and self.context.strict:
+                if self.scanner.isRestrictedWord(expr.name):
+                    self.tolerateError(Messages.StrictLHSAssignment)
         elif typ is Syntax.SpreadElement:
             expr.type = Syntax.RestElement
             self.reinterpretExpressionAsPattern(expr.argument)
@@ -1158,8 +1161,12 @@ class Parser(object):
                     args = self.parseAsyncArguments()
                 else:
                     args = self.parseArguments()
-                if expr.type is Syntax.Import and len(args) != 1:
-                    self.tolerateError(Messages.BadImportCallArity)
+                if expr.type is Syntax.Import:
+                    if len(args) != 1:
+                        self.tolerateError(Messages.BadImportCallArity)
+                    for arg in args:
+                        if arg.type is Syntax.SpreadElement:
+                            self.tolerateError(Messages.BadImportCallArity)
                 expr = self.finalize(self.startNode(startToken), Node.CallExpression(expr, args, optional))
                 if asyncArrow and self.match('=>'):
                     for arg in args:
@@ -1275,7 +1282,7 @@ class Parser(object):
             expr = self.inheritCoverGrammar(self.parseUnaryExpression)
             if self.context.strict and expr.type is Syntax.Identifier and self.scanner.isRestrictedWord(expr.name):
                 self.tolerateError(Messages.StrictLHSPrefix)
-            if not self.context.isAssignmentTarget:
+            if not self.context.isAssignmentTarget or expr.type is Syntax.MetaProperty:
                 self.tolerateError(Messages.InvalidLHSInAssignment)
             prefix = True
             expr = self.finalize(node, Node.UpdateExpression(token.value, expr, prefix))
@@ -1287,7 +1294,7 @@ class Parser(object):
                 if self.match('++', '--'):
                     if self.context.strict and expr.type is Syntax.Identifier and self.scanner.isRestrictedWord(expr.name):
                         self.tolerateError(Messages.StrictLHSPostfix)
-                    if not self.context.isAssignmentTarget:
+                    if not self.context.isAssignmentTarget or expr.type is Syntax.MetaProperty:
                         self.tolerateError(Messages.InvalidLHSInAssignment)
                     self.context.isAssignmentTarget = False
                     self.context.isBindingElement = False
@@ -1630,6 +1637,9 @@ class Parser(object):
                     if not self.match('='):
                         self.context.isAssignmentTarget = False
                         self.context.isBindingElement = False
+                        # Compound assignment cannot target destructuring patterns
+                        if expr.type is Syntax.ArrayExpression or expr.type is Syntax.ObjectExpression:
+                            self.tolerateError(Messages.InvalidLHSInAssignment)
                     else:
                         self.reinterpretExpressionAsPattern(expr)
 
@@ -2211,6 +2221,8 @@ class Parser(object):
             key = '$' + id.name
             if key not in self.context.labelSet:
                 self.throwError(Messages.UnknownLabel, id.name)
+            elif not self.context.labelSet[key]:
+                self.throwError(Messages.IllegalContinue)
 
         self.consumeSemicolon()
         if label is None and not self.context.inIteration:
@@ -2342,7 +2354,9 @@ class Parser(object):
             if key in self.context.labelSet:
                 self.throwError(Messages.Redeclaration, 'Label', id.name)
 
-            self.context.labelSet[key] = True
+            # Check if the labeled body is an iteration statement
+            isIterationLabel = self.lookahead.type is Token.Keyword and self.lookahead.value in ('do', 'for', 'while')
+            self.context.labelSet[key] = isIterationLabel
             if self.matchKeyword('class'):
                 self.tolerateUnexpectedToken(self.lookahead)
                 body = self.parseClassDeclaration()
@@ -3298,15 +3312,8 @@ class Parser(object):
             else:
                 if self.matchContextualKeyword('from'):
                     self.throwError(Messages.UnexpectedToken, self.lookahead.value)
-                # export default {}
-                # export default []
-                # export default (1 + 2)
-                if self.match('{'):
-                    declaration = self.parseObjectInitializer()
-                elif self.match('['):
-                    declaration = self.parseArrayInitializer()
-                else:
-                    declaration = self.parseAssignmentExpression()
+                # export default expression
+                declaration = self.parseAssignmentExpression()
                 self.consumeSemicolon()
                 exportDeclaration = self.finalize(node, Node.ExportDefaultDeclaration(declaration))
 
