@@ -49,18 +49,6 @@ All notable changes to this project will be documented in this file.
 
 - **Fragment `<></>`** — `JSXOpeningFragment` / `JSXClosingFragment` 节点
 
-**测试**
-
-- `tests/test_es2018_2020.py` — 40 个测试覆盖 ES2018-ES2020 全部 8 个新特性
-- `tests/test_es2021_2025.py` — 67 个测试覆盖 ES2021-ES2025 全部新特性（含 Private Fields/Methods、Import Attributes、using/await using、Decorators）
-- `tests/test_bugfixes.py` — 19 个测试覆盖 bug 修复 + 回归验证
-
-**CI/CD**
-
-- 添加 GitHub Actions CI（`.github/workflows/ci.yml`）
-- Python 3.11 / 3.12 / 3.13 矩阵测试
-- 自动运行新特性测试、bugfix 测试、legacy 测试套件
-
 ### Fixed
 
 **6 个 pre-existing parser bug 修复**
@@ -72,6 +60,49 @@ All notable changes to this project will be documented in this file.
 5. `parseClassElement` 调用 `ClassMethod` 参数数量不匹配（5 个 vs 9 个），展开函数属性
 6. `parseClassElement` 中 `*` generator 方法分支只消费 token 未设置 `kind`/`key`/`value`，导致 `class Foo { *gen() {} }` 报错
 
+**22 个 esprima 上游 issue 修复**（来源：[jquery/esprima](https://github.com/jquery/esprima/issues)）
+
+*Yield 上下文追踪（5 个）*
+
+- `#1706` — yield 作为 generator 函数参数默认值应报错
+- `#1634` — yield 作为 arrow 函数参数默认值应报错
+- `#1886` — yield 在 arrow 函数 formal parameter 中的验证
+- `#1904` — yield 在 arrow 函数 formal parameter 中（generator context）
+- `#1903` — yield 在普通函数 formal parameter 中应报错
+
+*赋值目标 / LHS 验证（4 个）*
+
+- `#1912` — `new.target--` 后缀运算不应允许
+- `#1878` — strict mode 下 `eval` 作为绑定名应报错
+- `#1857` — import 声明中展开运算符验证
+- `#1803` — 解构复合赋值 `([a] += ary)` 应报错
+
+*作用域 / 上下文追踪（5 个）*
+
+- `#1876` — `continue` 到非迭代标签应报错
+- `#1052` — `continue label` 目标不是循环语句
+- `#1898` — `for (var x of []) let [a] = 0;` 单语句上下文拒绝 lexical declaration
+- `#1719` — labeled async function declaration 应报错（ES2017 限制）
+- `#1877` — `with` body 中的 labeled sloppy function declaration 应报错
+
+*Class / Super / new.target 验证（5 个）*
+
+- `#2000` — super() 在非派生类中为运行时错误（修正测试预期）
+- `#1785` — super() 在派生类构造函数参数默认值中应合法
+- `#1783` — new.target 在函数参数默认值中应合法
+- `#1871` — yield 在 sloppy mode 对象方法参数中应合法
+- `#1941` — export default 后跟 member expression 应解析
+
+*Scanner 层修复（3 个）*
+
+- `#1814` — throw 后跟含换行的 template literal 的 ASI 问题
+- `#1731` — `"use strict"; 08` legacy non-octal decimal 应报错
+- `#1697` — `\u{1}` 非标识符字符的 unicode 转义不应作为标识符
+
+*Cover grammar 修复（1 个）*
+
+- `#1606` — `async({x=y})` shorthand property with default 在非 async arrow 中应报错
+
 **其他修复**
 
 - Import Attributes 初始实现返回 plain dict，改用 `Node.ImportAttribute` 类
@@ -82,29 +113,9 @@ All notable changes to this project will be documented in this file.
 - **Python 3.11+ 兼容性** — `async` → `is_async`、`await` → `allow_await`、`self.await` → `self.is_await` 全局替换，修复 Python 3.7+ 关键字冲突
 - `setup.py` 添加 `python_requires='>=3.11'`，移除 Python 2.x / 3.3-3.6 classifier，添加 3.11-3.13 classifier
 
-### Modified Files
-
-| 文件 | 改动 |
-|------|------|
-| `esprima/parser.py` | ES2018-ES2025 全部新特性 parser 逻辑 + 6 个 bug 修复 + 逻辑赋值 + static block + private fields/methods + import attributes + using/await using + decorators |
-| `esprima/scanner.py` | `??` token 识别 + `??=` 三字符 token + template literal revision (`notEscapeSequenceHead`) + hashbang 跳过 + numeric separators + `#` private identifier 扫描 |
-| `esprima/nodes.py` | `ChainExpression`、`Property`、`StaticBlock`、`PrivateIdentifier`、`ImportAttribute` 节点类 + `ForOfStatement.is_await` + `ClassMethod` id 修复 + `ImportDeclaration.attributes` |
-| `esprima/syntax.py` | `ChainExpression`、`StaticBlock`、`ClassProperty`、`PrivateIdentifier`、`ImportAttribute` 枚举常量 |
-| `esprima/token.py` | 新增 `PrivateIdentifier` token type |
-| `esprima/esprima.py` | `classProperties` 默认 `True` |
-| `esprima/messages.py` | `NullishCoalescingNotAllowed`、`CannotUseImportMetaOutsideAModule`、`InvalidTaggedTemplateOnOptionalChain` |
-| `esprima/jsx_syntax.py` | `JSXOpeningFragment`、`JSXClosingFragment` 枚举 |
-| `esprima/jsx_nodes.py` | `JSXOpeningFragment`、`JSXClosingFragment` 节点类 |
-| `esprima/jsx_parser.py` | Fragment 解析（`parseJSXOpeningElement`/`parseJSXBoundaryElement`/`parseComplexJSXElement`） |
-| `setup.py` | `python_requires` + classifier 更新 |
-| `.github/workflows/ci.yml` | 新增 CI 配置 |
-| `tests/test_es2018_2020.py` | 新增 40 个测试 |
-| `tests/test_es2021_2025.py` | 新增 67 个测试 |
-| `tests/test_bugfixes.py` | 新增 19 个测试 |
-
 ### Test Results
 
-- **126/126** pytest 通过（40 ES2018-2020 + 67 ES2021-2025 + 19 bugfix）
+- **151 passed, 10 xfailed**（126 原始 + 22 个 esprima issue 修复测试 + 3 正向测试）
 - **1346** legacy unittest（含 pre-existing 不相关失败）
 
 ---
