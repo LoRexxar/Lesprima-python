@@ -1,11 +1,9 @@
 # Lesprima-python
 
-[![PyPI version](https://img.shields.io/pypi/v/esprima.svg)](https://pypi.python.org/pypi/esprima)
-[![Python 3.11+](https://img.shields.io/pypi/pyversions/esprima.svg)](https://pypi.python.org/pypi/esprima)
+[![PyPI version](https://img.shields.io/pypi/v/lesprima.svg)](https://pypi.python.org/pypi/lesprima)
+[![Python 3.11+](https://img.shields.io/pypi/pyversions/lesprima.svg)](https://pypi.python.org/pypi/lesprima)
 
-
-> Enhanced fork of [Kronuz/esprima-python](https://github.com/Kronuz/esprima-python) — fixes core AST bugs, Supports ES2018–ES2025 syntax.
-
+> Enhanced fork of [Kronuz/esprima-python](https://github.com/Kronuz/esprima-python) — fixes core AST bugs, supports ES2018–ES2025 syntax.
 
 ## 特性
 
@@ -19,8 +17,13 @@
 ## 安装
 
 ```bash
-pip install esprima
+pip install lesprima
 ```
+
+> **Note:** PyPI 包名为 `lesprima`，但 import 名称仍为 `esprima`（保持与上游兼容）。如果之前安装过上游 `esprima`，请先卸载：
+> ```bash
+> pip uninstall esprima && pip install lesprima
+> ```
 
 ## 快速开始
 
