@@ -1453,6 +1453,40 @@ class Parser(object):
 
     # https://tc39.github.io/ecma262/#sec-assignment-operators
 
+    def _containsYieldExpression(self, node):
+        """Recursively check if an AST node tree contains any YieldExpression."""
+        if node is None:
+            return False
+        typ = node.type
+        if typ is Syntax.YieldExpression:
+            return True
+        if typ is Syntax.AssignmentPattern:
+            return self._containsYieldExpression(node.left) or self._containsYieldExpression(node.right)
+        if typ is Syntax.ArrayPattern:
+            for element in (node.elements or []):
+                if element is not None and self._containsYieldExpression(element):
+                    return True
+        if typ is Syntax.ObjectPattern:
+            for prop in (node.properties or []):
+                target = prop if prop.type is Syntax.RestElement else prop.value
+                if self._containsYieldExpression(target):
+                    return True
+        if typ is Syntax.RestElement:
+            return self._containsYieldExpression(node.argument)
+        if typ is Syntax.BinaryExpression:
+            return self._containsYieldExpression(node.left) or self._containsYieldExpression(node.right)
+        if typ is Syntax.CallExpression:
+            if self._containsYieldExpression(node.callee):
+                return True
+            for arg in (node.arguments or []):
+                if self._containsYieldExpression(arg):
+                    return True
+        if typ in (Syntax.UnaryExpression, Syntax.UpdateExpression):
+            return self._containsYieldExpression(node.argument)
+        if typ is Syntax.MemberExpression:
+            return self._containsYieldExpression(node.object)
+        return False
+
     def checkPatternParam(self, options, param):
         typ = param.type
         if typ is Syntax.Identifier:
@@ -1492,7 +1526,7 @@ class Parser(object):
         for param in params:
             if param.type is Syntax.AssignmentPattern:
                 if param.right.type is Syntax.YieldExpression:
-                    if param.right.argument:
+                    if not self.context.allowYield or param.right.argument:
                         self.throwUnexpectedToken(self.lookahead)
                     param.right.type = Syntax.Identifier
                     param.right.name = 'yield'
@@ -1505,6 +1539,8 @@ class Parser(object):
         if self.context.strict or not self.context.allowYield:
             for param in params:
                 if param.type is Syntax.YieldExpression:
+                    self.throwUnexpectedToken(self.lookahead)
+                if not self.context.allowYield and self._containsYieldExpression(param):
                     self.throwUnexpectedToken(self.lookahead)
 
         if options.message is Messages.StrictParamDupe:
@@ -1848,10 +1884,7 @@ class Parser(object):
         pattern = self.parsePattern(params, kind)
         if self.match('='):
             self.nextToken()
-            previousAllowYield = self.context.allowYield
-            self.context.allowYield = True
             right = self.isolateCoverGrammar(self.parseAssignmentExpression)
-            self.context.allowYield = previousAllowYield
             pattern = self.finalize(self.startNode(startToken), Node.AssignmentPattern(pattern, right))
 
         return pattern
@@ -2570,6 +2603,11 @@ class Parser(object):
                     break
         self.expect(')')
 
+        if not self.context.allowYield:
+            for param in options.params:
+                if self._containsYieldExpression(param):
+                    self.throwUnexpectedToken(self.lookahead)
+
         return Params(
             simple=options.simple,
             params=options.params,
@@ -2812,7 +2850,7 @@ class Parser(object):
         isGenerator = True
         previousAllowYield = self.context.allowYield
 
-        self.context.allowYield = True
+        self.context.allowYield = not isGenerator
         params = self.parseFormalParameters()
         self.context.allowYield = False
         method = self.parsePropertyMethod(params)
